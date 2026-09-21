@@ -15,24 +15,6 @@ const { wasi_connectDatabase } = require('./wasilib/database');
 const config = require('./wasi');
 const { cleanTempFiles } = require('./wasilib/cleaner');
 
-// In-Memory Config Caching for 0ms Response Speed
-const botConfigCacheMap = new Map();
-const globalAutoForwardCacheMap = new Map();
-
-async function getCachedBotConfig(sessionId) {
-    const cached = botConfigCacheMap.get(sessionId);
-    if (cached && (Date.now() - cached.timestamp < 10000)) {
-        return cached.data;
-    }
-    try {
-        const data = await kaif_getBotConfig(sessionId);
-        if (data) botConfigCacheMap.set(sessionId, { data, timestamp: Date.now() });
-        return data;
-    } catch (e) {
-        return cached ? cached.data : null;
-    }
-}
-
 async function getCachedGlobalAutoForward(sessionId) {
     const cached = globalAutoForwardCacheMap.get(sessionId);
     if (cached && (Date.now() - cached.timestamp < 10000)) {
