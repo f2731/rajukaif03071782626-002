@@ -14,6 +14,7 @@ const { wasi_connectDatabase } = require('./wasilib/database');
 
 const config = require('./wasi');
 const { cleanTempFiles } = require('./wasilib/cleaner');
+
 // In-Memory Config Caching for 0ms Response Speed
 const botConfigCacheMap = new Map();
 const globalAutoForwardCacheMap = new Map();
@@ -493,26 +494,23 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
              
 // 1. GLOBAL AUTO FORWARD LOGIC (FAST & DIRECT)
 try {
-    if (!kaif_msg.key.fromMe && kaif_origin !== 'status@broadcast') {
+    if (!wasi_msg.key.fromMe && rawFrom !== 'status@broadcast') {
+        const sessionId = config.sessionId || 'wasi_session';
         const globalCfg = await getCachedGlobalAutoForward(sessionId);
         if (globalCfg?.enabled && globalCfg?.targetJids?.length > 0) {
-            const msgId = kaif_msg.key.id;
+            const msgId = wasi_msg.key.id;
 
             const isSourceWatched = (globalCfg.sourceJids || globalCfg.sourceJids.length === 0 || globalCfg.sourceJids.some(s => {
                 if (!s) return false;
                 const cleanS = s.trim().toLowerCase();
-                const cleanD = kaif_origin.trim().toLowerCase();
+                const cleanD = rawFrom.trim().toLowerCase();
                 if (cleanS === cleanD) return true;
 
-                if (kaif_sender && cleanS === kaif_sender.trim().toLowerCase()) return true;
-                if (realPhoneJid && cleanS === realPhoneJid.trim().toLowerCase()) return true;
+                if (rawFrom && cleanS === rawFrom.trim().toLowerCase()) return true;
 
                 const sDigits = cleanS.replace(/\D/g, '');
                 const dDigits = cleanD.replace(/\D/g, '');
                 if (sDigits && dDigits && sDigits === dDigits) return true;
-
-                const pDigits = (realPhoneJid || kaif_sender || '').replace(/\D/g, '');
-                if (sDigits && pDigits && sDigits === pDigits) return true;
 
                 return false;
             }));
@@ -533,7 +531,7 @@ try {
                         }
 
                         let relayMsg = processAndCleanMessage(
-                            kaif_msg.message,
+                            wasi_msg.message,
                             globalCfg.oldTextRegex || null,
                             globalCfg.newText !== undefined ? globalCfg.newText : null
                         );
@@ -561,10 +559,10 @@ try {
                             }
 
                             enqueueAutoForward({
-                                kaif_sock,
+                                kaif_sock: wasi_sock,
                                 targetJids: [...new Set(validTargets)],
                                 relayMsg,
-                                kaif_origin,
+                                kaif_origin: rawFrom,
                                 msgId
                             });
                         }
