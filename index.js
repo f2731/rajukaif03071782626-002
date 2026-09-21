@@ -14,7 +14,44 @@ const { wasi_connectDatabase } = require('./wasilib/database');
 
 const config = require('./wasi');
 const { cleanTempFiles } = require('./wasilib/cleaner');
+// In-Memory Config Caching for 0ms Response Speed
+const botConfigCacheMap = new Map();
+const globalAutoForwardCacheMap = new Map();
 
+async function getCachedBotConfig(sessionId) {
+    const cached = botConfigCacheMap.get(sessionId);
+    if (cached && (Date.now() - cached.timestamp < 10000)) {
+        return cached.data;
+    }
+    try {
+        const data = await kaif_getBotConfig(sessionId);
+        if (data) botConfigCacheMap.set(sessionId, { data, timestamp: Date.now() });
+        return data;
+    } catch (e) {
+        return cached ? cached.data : null;
+    }
+}
+
+async function getCachedGlobalAutoForward(sessionId) {
+    const cached = globalAutoForwardCacheMap.get(sessionId);
+    if (cached && (Date.now() - cached.timestamp < 10000)) {
+        return cached.data;
+    }
+    try {
+        const data = await kaif_getGlobalAutoForward(sessionId);
+        if (data) globalAutoForwardCacheMap.set(sessionId, { data, timestamp: Date.now() });
+        return data;
+    } catch (e) {
+        return cached ? cached.data : null;
+    }
+}
+
+function invalidateConfigCaches(sessionId) {
+    botConfigCacheMap.delete(sessionId);
+    globalAutoForwardCacheMap.delete(sessionId);
+}
+global.invalidateConfigCaches = invalidateConfigCaches;
+        
 // Load persistent config
 try {
     if (fs.existsSync(path.join(__dirname, 'botConfig.json'))) {
@@ -454,79 +491,92 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
             return;
         }
              
-        // FORWARDING LOGIC
-        const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
-        if (!sourceList.some(src => cleanFrom.includes(src))) return;
+// 1. GLOBAL AUTO FORWARD LOGIC (FAST & DIRECT)
+try {
+    if (!kaif_msg.key.fromMe && kaif_origin !== 'status@broadcast') {
+        const globalCfg = await getCachedGlobalAutoForward(sessionId);
+        if (globalCfg?.enabled && globalCfg?.targetJids?.length > 0) {
+            const msgId = kaif_msg.key.id;
 
-        const targetList = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
-        if (targetList.length === 0) return;
+            const isSourceWatched = (globalCfg.sourceJids || globalCfg.sourceJids.length === 0 || globalCfg.sourceJids.some(s => {
+                if (!s) return false;
+                const cleanS = s.trim().toLowerCase();
+                const cleanD = kaif_origin.trim().toLowerCase();
+                if (cleanS === cleanD) return true;
 
-        // Directly reading FORWARD_TYPES from Heroku Env
-        const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document')
-            .toLowerCase()
-            .split(',')
-            .map(t => t.trim());
+                if (kaif_sender && cleanS === kaif_sender.trim().toLowerCase()) return true;
+                if (realPhoneJid && cleanS === realPhoneJid.trim().toLowerCase()) return true;
 
-        const isVideo = !!(msgContent.videoMessage);
-        const isImage = !!(msgContent.imageMessage);
-        const isText = !!(msgContent.conversation || msgContent.extendedTextMessage);
-        const isDocument = !!(msgContent.documentMessage);
-        const isSticker = !!(msgContent.stickerMessage);
+                const sDigits = cleanS.replace(/\D/g, '');
+                const dDigits = cleanD.replace(/\D/g, '');
+                if (sDigits && dDigits && sDigits === dDigits) return true;
 
-        let shouldForward = false;
-        if (isVideo && allowedTypes.includes('video')) shouldForward = true;
-        if (isImage && allowedTypes.includes('image')) shouldForward = true;
-        if (isText && allowedTypes.includes('text')) shouldForward = true;
-        if (isDocument && allowedTypes.includes('document')) shouldForward = true;
-        if (isSticker && allowedTypes.includes('sticker')) shouldForward = true;
+                const pDigits = (realPhoneJid || kaif_sender || '').replace(/\D/g, '');
+                if (sDigits && pDigits && sDigits === pDigits) return true;
 
-            if (shouldForward) {
-                for (const targetJid of targetList) {
-                    let success = false;
+                return false;
+            }));
 
-                // 3 times retry mechanism with custom sender name
-                for (let attempt = 1; attempt <= 3; attempt++) {
-                    try {
-                        let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
+            if (isSourceWatched) {
+                const validTargets = (globalCfg.targetJids || []).map(t => sanitizeJid(t)).filter(Boolean);
 
-                        for (const type of Object.keys(cleanMessage)) {
-                            if (cleanMessage[type]?.contextInfo) {
-                                delete cleanMessage[type].contextInfo.forwardingScore;
-                                delete cleanMessage[type].contextInfo.isForwarded;
-                                
-                                // Yahan aap apna naam ya custom text set kar sakte hain
-                                cleanMessage[type].contextInfo.participant = "Raju Boss +923071782626";
+                if (validTargets.length > 0) {
+                    if (msgId && processedAutoForwardMsgSet.has(msgId)) {
+                        // Already processed
+                    } else {
+                        if (msgId) {
+                            processedAutoForwardMsgSet.add(msgId);
+                            if (processedAutoForwardMsgSet.size > 1000) {
+                                const firstVal = processedAutoForwardMsgSet.values().next().value;
+                                processedAutoForwardMsgSet.delete(firstVal);
                             }
                         }
 
-                        try {
-                            await wasi_sock.sendMessage(targetJid, cleanMessage);
-                        } catch (mediaErr) {
-                            await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
-                        }
+                        let relayMsg = processAndCleanMessage(
+                            kaif_msg.message,
+                            globalCfg.oldTextRegex || null,
+                            globalCfg.newText !== undefined ? globalCfg.newText : null
+                        );
 
-                        console.log(`[+] Message forwarded to ${targetJid}`);
-                        success = true;
-                        break;
-                    } catch (err) {
-                        console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
-                        if (attempt < 3) await new Promise(res => setTimeout(res, 4000));
+                        if (relayMsg?.viewOnceMessageV2) relayMsg = relayMsg.viewOnceMessageV2.message;
+                        else if (relayMsg?.viewOnceMessage) relayMsg = relayMsg.viewOnceMessage.message;
+                        else if (relayMsg?.viewOnceMessageV2Extension) relayMsg = relayMsg.viewOnceMessageV2Extension.message;
+                        else if (relayMsg?.ephemeralMessage) relayMsg = relayMsg.ephemeralMessage.message;
+
+                        let shouldForward = true;
+                        if (relayMsg?.imageMessage && globalCfg.forwardPicture === false) shouldForward = false;
+                        else if (relayMsg?.videoMessage && globalCfg.forwardVideo === false) shouldForward = false;
+                        else if (relayMsg?.audioMessage && globalCfg.forwardAudio === false) shouldForward = false;
+                        else if (relayMsg?.documentMessage && globalCfg.forwardDocument === false) shouldForward = false;
+                        else if (!relayMsg?.conversation && !relayMsg?.extendedTextMessage && globalCfg.forwardText === false) shouldForward = false;
+
+                        if (shouldForward && relayMsg) {
+                            if (globalCfg.autoForwardTimestamp) {
+                                const timeStr = '\n\n_[' + new Date().toLocaleTimeString() + ']_';
+                                if (relayMsg.conversation) relayMsg.conversation += timeStr;
+                                else if (relayMsg.extendedTextMessage?.text) relayMsg.extendedTextMessage.text += timeStr;
+                                else if (relayMsg.imageMessage?.caption) relayMsg.imageMessage.caption += timeStr;
+                                else if (relayMsg.videoMessage?.caption) relayMsg.videoMessage.caption += timeStr;
+                                else if (relayMsg.documentMessage?.caption) relayMsg.documentMessage.caption += timeStr;
+                            }
+
+                            enqueueAutoForward({
+                                kaif_sock,
+                                targetJids: [...new Set(validTargets)],
+                                relayMsg,
+                                kaif_origin,
+                                msgId
+                            });
+                        }
                     }
                 }
-                    
-            // Delay only for videos
-if (isVideo) {
-    await new Promise(res => setTimeout(res, 2000));
-
             }
         }
-
-        }
-
-    } catch (e) {
-        console.error('❌ General Error:', e.message);
     }
-});
+} catch (err) {
+    console.error('[GLOBAL-AUTO-FORWARD] Error:', err.message);
+}
+
 
 // ============================================================
 // 🚀 ALL APIS (ADD THESE TO YOUR INDEX.JS)
