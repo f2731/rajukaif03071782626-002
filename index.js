@@ -122,18 +122,6 @@ function cleanForwardedLabel(message) {
             }
         }
         
-        if (cleanedMessage.protocolMessage) {
-            if (cleanedMessage.protocolMessage.type === 14 || 
-                cleanedMessage.protocolMessage.type === 26) {
-                if (cleanedMessage.protocolMessage.historySyncNotification) {
-                    const syncData = cleanedMessage.protocolMessage.historySyncNotification;
-                    if (syncData.pushName) {
-                        console.log('Newsletter from:', syncData.pushName);
-                    }
-                }
-            }
-        }
-        
         return cleanedMessage;
     } catch (error) {
         console.error('Error cleaning forwarded label:', error);
@@ -186,60 +174,6 @@ function replaceCaption(caption) {
     });
     
     return result;
-}
-
-/**
- * Process and clean a message completely
- */
-function processAndCleanMessage(originalMessage) {
-    try {
-        let cleanedMessage = JSON.parse(JSON.stringify(originalMessage));
-        cleanedMessage = cleanForwardedLabel(cleanedMessage);
-        
-        const text = cleanedMessage.conversation ||
-            cleanedMessage.extendedTextMessage?.text ||
-            cleanedMessage.imageMessage?.caption ||
-            cleanedMessage.videoMessage?.caption ||
-            cleanedMessage.documentMessage?.caption || '';
-        
-        if (text) {
-            const cleanedText = cleanNewsletterText(text);
-            
-            if (cleanedMessage.conversation) {
-                cleanedMessage.conversation = cleanedText;
-            } else if (cleanedMessage.extendedTextMessage?.text) {
-                cleanedMessage.extendedTextMessage.text = cleanedText;
-            } else if (cleanedMessage.imageMessage?.caption) {
-                cleanedMessage.imageMessage.caption = replaceCaption(cleanedText);
-            } else if (cleanedMessage.videoMessage?.caption) {
-                cleanedMessage.videoMessage.caption = replaceCaption(cleanedText);
-            } else if (cleanedMessage.documentMessage?.caption) {
-                cleanedMessage.documentMessage.caption = replaceCaption(cleanedText);
-            }
-        }
-        
-        delete cleanedMessage.protocolMessage;
-        
-        if (cleanedMessage.extendedTextMessage?.contextInfo?.participant) {
-            const participant = cleanedMessage.extendedTextMessage.contextInfo.participant;
-            if (participant.includes('newsletter') || participant.includes('broadcast')) {
-                delete cleanedMessage.extendedTextMessage.contextInfo.participant;
-                delete cleanedMessage.extendedTextMessage.contextInfo.stanzaId;
-                delete cleanedMessage.extendedTextMessage.contextInfo.remoteJid;
-            }
-        }
-        
-        if (cleanedMessage.extendedTextMessage) {
-            cleanedMessage.extendedTextMessage.contextInfo = cleanedMessage.extendedTextMessage.contextInfo || {};
-            cleanedMessage.extendedTextMessage.contextInfo.isForwarded = false;
-            cleanedMessage.extendedTextMessage.contextInfo.forwardingScore = 0;
-        }
-        
-        return cleanedMessage;
-    } catch (error) {
-        console.error('Error processing message:', error);
-        return originalMessage;
-    }
 }
 
 // -----------------------------------------------------------------------------
@@ -409,7 +343,7 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ GLOBAL AUTO FORWARD LOGIC (UPDATED & CLEANED)
+            // ⚡ GLOBAL AUTO FORWARD LOGIC (WORLDWIDE NUMBERS & ALBUM/VIDEO SUPPORT)
             // =========================================================================
             const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
             if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
@@ -417,16 +351,18 @@ async function startSession(sessionId) {
             const targetList = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
             if (targetList.length === 0) return;
 
-            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document,sticker,text')
+            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document,sticker,text,buttonsMessage,templateMessage,listMessage')
                 .toLowerCase()
                 .split(',')
                 .map(t => t.trim());
 
-            const isVideo = !!(msgContent.videoMessage);
-            const isImage = !!(msgContent.imageMessage);
-            const isText = !!(msgContent.conversation || msgContent.extendedTextMessage);
-            const isDocument = !!(msgContent.documentMessage);
-            const isSticker = !!(msgContent.stickerMessage);
+            // Comprehensive media & album check
+            const isVideo = !!(msgContent.videoMessage || msgContent.ephemeralMessage?.message?.videoMessage || msgContent.viewOnceMessage?.message?.videoMessage || msgContent.viewOnceMessageV2?.message?.videoMessage);
+            const isImage = !!(msgContent.imageMessage || msgContent.ephemeralMessage?.message?.imageMessage || msgContent.viewOnceMessage?.message?.imageMessage || msgContent.viewOnceMessageV2?.message?.imageMessage);
+            const isText = !!(msgContent.conversation || msgContent.extendedTextMessage || msgContent.ephemeralMessage?.message?.conversation || msgContent.ephemeralMessage?.message?.extendedTextMessage);
+            const isDocument = !!(msgContent.documentMessage || msgContent.ephemeralMessage?.message?.documentMessage);
+            const isSticker = !!(msgContent.stickerMessage || msgContent.ephemeralMessage?.message?.stickerMessage);
+            const isAlbum = !!(msgContent.groupInviteMessage || msgContent.pollCreationMessage || msgContent.buttonsMessage || msgContent.templateMessage || msgContent.listMessage || msgContent.reactionMessage);
 
             let shouldForward = false;
             if (isVideo && allowedTypes.includes('video')) shouldForward = true;
@@ -434,6 +370,7 @@ async function startSession(sessionId) {
             if (isText && allowedTypes.includes('text')) shouldForward = true;
             if (isDocument && allowedTypes.includes('document')) shouldForward = true;
             if (isSticker && allowedTypes.includes('sticker')) shouldForward = true;
+            if (isAlbum) shouldForward = true; // Support for albums and other rich messages globally
 
             if (shouldForward) {
                 for (const targetJid of targetList) {
@@ -444,15 +381,21 @@ async function startSession(sessionId) {
                         try {
                             let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
 
-                            for (const type of Object.keys(cleanMessage)) {
-                                if (cleanMessage[type]?.contextInfo) {
-                                    delete cleanMessage[type].contextInfo.forwardingScore;
-                                    delete cleanMessage[type].contextInfo.isForwarded;
-                                    
-                                    // Custom sender tag configuration
-                                    cleanMessage[type].contextInfo.participant = "Raju Boss +923071782626";
+                            // Deep clean context info across all possible nested message structures
+                            const cleanContext = (obj) => {
+                                if (!obj || typeof obj !== 'object') return;
+                                if (obj.contextInfo) {
+                                    delete obj.contextInfo.forwardingScore;
+                                    delete obj.contextInfo.isForwarded;
+                                    obj.contextInfo.participant = "Raju Boss +923071782626";
                                 }
-                            }
+                                for (let key of Object.keys(obj)) {
+                                    if (typeof obj[key] === 'object') {
+                                        cleanContext(obj[key]);
+                                    }
+                                }
+                            };
+                            cleanContext(cleanMessage);
 
                             try {
                                 await wasi_sock.sendMessage(targetJid, cleanMessage);
@@ -460,7 +403,7 @@ async function startSession(sessionId) {
                                 await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
                             }
 
-                            console.log(`[+] Message forwarded to ${targetJid}`);
+                            console.log(`[+] Message successfully forwarded to ${targetJid}`);
                             success = true;
                             break;
                         } catch (err) {
@@ -469,9 +412,9 @@ async function startSession(sessionId) {
                         }
                     }
                         
-                    // Delay only for videos to prevent rate limits
-                    if (isVideo) {
-                        await new Promise(res => setTimeout(res, 2000));
+                    // Delay to prevent rate limits for heavy media/videos/albums
+                    if (isVideo || isAlbum) {
+                        await new Promise(res => setTimeout(res, 2500));
                     }
                 }
             }
@@ -601,10 +544,11 @@ wasi_app.get('/api/health', async (req, res) => {
 // SERVER START
 // -----------------------------------------------------------------------------
 function wasi_startServer() {
+    wasi_app.app.listen(wasi_port, () => {});
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
         console.log(`📡 Auto Forward: ${SOURCE_JIDS.length} source(s) → ${TARGET_JIDS.length} target(s)`);
-        console.log(`✨ Message Cleaning: Forwarded labels removed, Newsletter markers cleaned`);
+        console.log(`✨ Message Cleaning: Forwarded labels removed, Worldwide numbers & Album/Videos supported`);
         console.log(`🤖 Bot Commands: !ping, !jid, !gjid`);
         console.log(`\n📌 API Endpoints:`);
         console.log(`   GET  /api/status     - Get bot status`);
