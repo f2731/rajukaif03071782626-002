@@ -80,9 +80,6 @@ const NEW_TEXT = process.env.NEW_TEXT
 // HELPER FUNCTIONS FOR MESSAGE CLEANING
 // -----------------------------------------------------------------------------
 
-/**
- * Clean forwarded label from message
- */
 function cleanForwardedLabel(message) {
     try {
         let cleanedMessage = JSON.parse(JSON.stringify(message));
@@ -129,26 +126,14 @@ function cleanForwardedLabel(message) {
     }
 }
 
-/**
- * Clean newsletter/information markers from text
- */
 function cleanNewsletterText(text) {
     if (!text) return text;
     
     const newsletterMarkers = [
-        /📢\s*/g,
-        /🔔\s*/g,
-        /📰\s*/g,
-        /🗞️\s*/g,
-        /\[NEWSLETTER\]/gi,
-        /\[BROADCAST\]/gi,
-        /\[ANNOUNCEMENT\]/gi,
-        /Newsletter:/gi,
-        /Broadcast:/gi,
-        /Announcement:/gi,
-        /Forwarded many times/gi,
-        /Forwarded message/gi,
-        /This is a broadcast message/gi
+        /📢\s*/g, /🔔\s*/g, /📰\s*/g, /🗞️\s*/g,
+        /\[NEWSLETTER\]/gi, /\[BROADCAST\]/gi, /\[ANNOUNCEMENT\]/gi,
+        /Newsletter:/gi, /Broadcast:/gi, /Announcement:/gi,
+        /Forwarded many times/gi, /Forwarded message/gi, /This is a broadcast message/gi
     ];
     
     let cleanedText = text;
@@ -156,23 +141,17 @@ function cleanNewsletterText(text) {
         cleanedText = cleanedText.replace(marker, '');
     });
     
-    cleanedText = cleanedText.trim();
-    return cleanedText;
+    return cleanedText.trim();
 }
 
-/**
- * Replace caption text using regex patterns
- */
 function replaceCaption(caption) {
     if (!caption) return caption;
     if (!OLD_TEXT_REGEX.length || !NEW_TEXT) return caption;
     
     let result = caption;
-    
     OLD_TEXT_REGEX.forEach(regex => {
         result = result.replace(regex, NEW_TEXT);
     });
-    
     return result;
 }
 
@@ -182,18 +161,15 @@ function replaceCaption(caption) {
 
 async function handlePingCommand(sock, from) {
     await sock.sendMessage(from, { text: "Raju-Autoforward-Bot is Working Fast (923071782626)" });
-    console.log(`Ping command executed for ${from}`);
 }
 
 async function handleJidCommand(sock, from) {
     await sock.sendMessage(from, { text: `${from}` });
-    console.log(`JID command executed for ${from}`);
 }
 
 async function handleGjidCommand(sock, from) {
     try {
         const groups = await sock.groupFetchAllParticipating();
-        
         let response = "📌 *Groups List:*\n\n";
         let groupCount = 1;
         
@@ -201,38 +177,23 @@ async function handleGjidCommand(sock, from) {
             const groupName = group.subject || "Unnamed Group";
             const participantsCount = group.participants ? group.participants.length : 0;
             
-            let groupType = "Simple Group";
-            if (group.isCommunity) {
-                groupType = "Community";
-            } else if (group.isCommunityAnnounce) {
-                groupType = "Community Announcement";
-            } else if (group.parentGroup) {
-                groupType = "Subgroup";
-            }
-            
             response += `${groupCount}. *${groupName}*\n`;
             response += `   👥 Members: ${participantsCount}\n`;
             response += `   🆔: \`${jid}\`\n`;
-            response += `   📝 Type: ${groupType}\n`;
             response += `   ──────────────\n\n`;
-            
             groupCount++;
         }
         
         if (groupCount === 1) {
-            response = "❌ No groups found. You are not in any groups.";
+            response = "❌ No groups found.";
         } else {
             response += `\n*Total Groups: ${groupCount - 1}*`;
         }
         
         await sock.sendMessage(from, { text: response });
-        console.log(`GJID command executed. Sent ${groupCount - 1} groups list.`);
-        
     } catch (error) {
         console.error('Error fetching groups:', error);
-        await sock.sendMessage(from, { 
-            text: "❌ Error fetching groups list. Please try again later." 
-        });
+        await sock.sendMessage(from, { text: "❌ Error fetching groups list." });
     }
 }
 
@@ -242,10 +203,7 @@ async function handleGjidCommand(sock, from) {
 async function startSession(sessionId) {
     if (sessions.has(sessionId)) {
         const existing = sessions.get(sessionId);
-        if (existing.isConnected && existing.sock) {
-            console.log(`Session ${sessionId} is already connected.`);
-            return;
-        }
+        if (existing.isConnected && existing.sock) return;
 
         if (existing.sock) {
             existing.sock.ev.removeAllListeners('connection.update');
@@ -273,7 +231,6 @@ async function startSession(sessionId) {
         if (qr) {
             sessionState.qr = qr;
             sessionState.isConnected = false;
-            console.log(`QR generated for session: ${sessionId}`);
         }
 
         if (connection === 'close') {
@@ -283,14 +240,9 @@ async function startSession(sessionId) {
 
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut && statusCode !== 440;
 
-            console.log(`Session ${sessionId}: Connection closed, reconnecting: ${shouldReconnect}`);
-
             if (shouldReconnect) {
-                setTimeout(() => {
-                    startSession(sessionId);
-                }, 3000);
+                setTimeout(() => { startSession(sessionId); }, 3000);
             } else {
-                console.log(`Session ${sessionId} logged out. Removing.`);
                 sessions.delete(sessionId);
                 await wasi_clearSession(sessionId);
             }
@@ -303,7 +255,6 @@ async function startSession(sessionId) {
 
     wasi_sock.ev.on('creds.update', saveCreds);
 
-    // Universal JID Cleaner
     const cleanJid = (id) => id ? id.split(':')[0].trim() : '';
 
     wasi_sock.ev.on('messages.upsert', async wasi_m => {
@@ -315,7 +266,6 @@ async function startSession(sessionId) {
             const cleanFrom = cleanJid(rawFrom);
             const msgContent = wasi_msg.message;
 
-            // Extract Text Properly
             const msgText = (
                 msgContent.conversation || 
                 msgContent.extendedTextMessage?.text || 
@@ -324,26 +274,21 @@ async function startSession(sessionId) {
                 ''
             ).trim();
 
-            // 1. PING COMMAND
             if (msgText.toLowerCase() === '!ping') {
                 await handlePingCommand(wasi_sock, rawFrom);
                 return;
             }
-
-            // 2. JID COMMAND
             if (msgText.toLowerCase() === '!jid') {
                 await handleJidCommand(wasi_sock, rawFrom);
                 return;
             }
-
-            // 3. ALL GROUPS & COMMUNITIES JID LIST
             if (msgText.toLowerCase() === '!gjid') {
                 await handleGjidCommand(wasi_sock, rawFrom);
                 return;
             }
                  
             // =========================================================================
-            // ⚡ GLOBAL AUTO FORWARD LOGIC (WORLDWIDE NUMBERS & ALBUM/VIDEO SUPPORT)
+            // ⚡ GLOBAL AUTO FORWARD LOGIC
             // =========================================================================
             const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
             if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
@@ -356,13 +301,12 @@ async function startSession(sessionId) {
                 .split(',')
                 .map(t => t.trim());
 
-            // Comprehensive media & album check
             const isVideo = !!(msgContent.videoMessage || msgContent.ephemeralMessage?.message?.videoMessage || msgContent.viewOnceMessage?.message?.videoMessage || msgContent.viewOnceMessageV2?.message?.videoMessage);
             const isImage = !!(msgContent.imageMessage || msgContent.ephemeralMessage?.message?.imageMessage || msgContent.viewOnceMessage?.message?.imageMessage || msgContent.viewOnceMessageV2?.message?.imageMessage);
             const isText = !!(msgContent.conversation || msgContent.extendedTextMessage || msgContent.ephemeralMessage?.message?.conversation || msgContent.ephemeralMessage?.message?.extendedTextMessage);
             const isDocument = !!(msgContent.documentMessage || msgContent.ephemeralMessage?.message?.documentMessage);
             const isSticker = !!(msgContent.stickerMessage || msgContent.ephemeralMessage?.message?.stickerMessage);
-            const isAlbum = !!(msgContent.groupInviteMessage || msgContent.pollCreationMessage || msgContent.buttonsMessage || msgContent.templateMessage || msgContent.listMessage || msgContent.reactionMessage);
+            const isAlbum = !!(msgContent.groupInviteMessage || msgContent.pollCreationMessage || msgContent.buttonsMessage || msgContent.templateMessage || msgContent.listMessage || msgContent.reactionMessage || msgContent.albumMessage);
 
             let shouldForward = false;
             if (isVideo && allowedTypes.includes('video')) shouldForward = true;
@@ -370,18 +314,14 @@ async function startSession(sessionId) {
             if (isText && allowedTypes.includes('text')) shouldForward = true;
             if (isDocument && allowedTypes.includes('document')) shouldForward = true;
             if (isSticker && allowedTypes.includes('sticker')) shouldForward = true;
-            if (isAlbum) shouldForward = true; // Support for albums and other rich messages globally
+            if (isAlbum) shouldForward = true;
 
             if (shouldForward) {
                 for (const targetJid of targetList) {
-                    let success = false;
-
-                    // 3 times retry mechanism with custom sender name/participant
                     for (let attempt = 1; attempt <= 3; attempt++) {
                         try {
                             let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
 
-                            // Deep clean context info across all possible nested message structures
                             const cleanContext = (obj) => {
                                 if (!obj || typeof obj !== 'object') return;
                                 if (obj.contextInfo) {
@@ -403,18 +343,16 @@ async function startSession(sessionId) {
                                 await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
                             }
 
-                            console.log(`[+] Message successfully forwarded to ${targetJid}`);
-                            success = true;
+                            console.log(`[+] Message forwarded to ${targetJid}`);
                             break;
                         } catch (err) {
                             console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
-                            if (attempt < 3) await new Promise(res => setTimeout(res, 4000));
+                            if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
                         }
                     }
                         
-                    // Delay to prevent rate limits for heavy media/videos/albums
                     if (isVideo || isAlbum) {
-                        await new Promise(res => setTimeout(res, 2500));
+                        await new Promise(res => setTimeout(res, 2000));
                     }
                 }
             }
@@ -437,13 +375,7 @@ wasi_app.get('/api/status', async (req, res) => {
     let connected = false;
     let dbConnected = false;
 
-    if (config.mongoDbUrl) {
-        try {
-            dbConnected = true;
-        } catch (e) {
-            dbConnected = false;
-        }
-    }
+    if (config.mongoDbUrl) dbConnected = true;
 
     if (session) {
         connected = session.isConnected;
@@ -468,25 +400,15 @@ wasi_app.get('/api/status', async (req, res) => {
 
 wasi_app.post('/api/restart', async (req, res) => {
     try {
-        console.log('🔄 Restarting bot...');
         for (const [sessionId, session] of sessions) {
             if (session.sock) {
-                try {
-                    session.sock.end(undefined);
-                } catch (e) {
-                    console.error(`Error ending session ${sessionId}:`, e);
-                }
+                try { session.sock.end(undefined); } catch (e) {}
             }
         }
         sessions.clear();
-        
-        setTimeout(() => {
-            main().catch(err => console.error('Restart error:', err));
-        }, 1000);
-        
+        setTimeout(() => { main().catch(err => console.error(err)); }, 1000);
         res.json({ success: true, message: 'Bot restarting...' });
     } catch (error) {
-        console.error('Restart error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -497,37 +419,23 @@ wasi_app.post('/api/logout', async (req, res) => {
         const session = sessions.get(sessionId);
         
         if (session && session.sock) {
-            try {
-                await session.sock.logout();
-            } catch (e) {
-                console.error('Logout error:', e);
-            }
+            try { await session.sock.logout(); } catch (e) {}
             sessions.delete(sessionId);
             await wasi_clearSession(sessionId);
         }
         
         res.json({ success: true, message: 'Logged out successfully' });
     } catch (error) {
-        console.error('Logout error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
 wasi_app.get('/api/sessions', async (req, res) => {
-    try {
-        const sessionList = Array.from(sessions.keys()).map(id => ({
-            sessionId: id,
-            isConnected: sessions.get(id)?.isConnected || false
-        }));
-        
-        res.json({
-            success: true,
-            sessions: sessionList,
-            total: sessionList.length
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
+    const sessionList = Array.from(sessions.keys()).map(id => ({
+        sessionId: id,
+        isConnected: sessions.get(id)?.isConnected || false
+    }));
+    res.json({ success: true, sessions: sessionList, total: sessionList.length });
 });
 
 wasi_app.get('/api/health', async (req, res) => {
@@ -541,21 +449,12 @@ wasi_app.get('/api/health', async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// SERVER START
+// SERVER START (Single instance to prevent port clash crash)
 // -----------------------------------------------------------------------------
 function wasi_startServer() {
-    wasi_app.app.listen(wasi_port, () => {});
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`📡 Auto Forward: ${SOURCE_JIDS.length} source(s) → ${TARGET_JIDS.length} target(s)`);
-        console.log(`✨ Message Cleaning: Forwarded labels removed, Worldwide numbers & Album/Videos supported`);
-        console.log(`🤖 Bot Commands: !ping, !jid, !gjid`);
-        console.log(`\n📌 API Endpoints:`);
-        console.log(`   GET  /api/status     - Get bot status`);
-        console.log(`   POST /api/restart    - Restart bot`);
-        console.log(`   POST /api/logout     - Logout bot`);
-        console.log(`   GET  /api/sessions   - List all sessions`);
-        console.log(`   GET  /api/health     - Health check`);
+        console.log(`📡 Auto Forward Active`);
     });
 }
 
@@ -564,10 +463,7 @@ function wasi_startServer() {
 // -----------------------------------------------------------------------------
 async function main() {
     if (config.mongoDbUrl) {
-        const dbResult = await wasi_connectDatabase(config.mongoDbUrl);
-        if (dbResult) {
-            console.log('✅ Database connected');
-        }
+        await wasi_connectDatabase(config.mongoDbUrl);
     }
 
     const sessionId = config.sessionId || 'wasi_session';
@@ -576,12 +472,4 @@ async function main() {
     wasi_startServer();
 }
 
-setInterval(() => {
-    const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024;
-    if (memoryUsage > 450) {
-        console.log(`⚠️ High Memory Usage detected (${Math.round(memoryUsage)}MB). Restarting process...`);
-        process.exit(0);
-    }
-}, 5 * 60 * 1000);
-
-main();
+main().catch(err => console.error('Main startup error:', err));
