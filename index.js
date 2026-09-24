@@ -25,103 +25,6 @@ try {
     console.error('Failed to load botConfig.json:', e);
 }
 
-// INSTANT PARALLEL AUTO-FORWARD QUEUE & SANITIZED JID DISPATCH
-// -----------------------------------------------------------------------------
-function sanitizeJid(input) {
-    if (!input || typeof input !== 'string') return null;
-    let str = input.trim().toLowerCase();
-    const keywords = ['global', 'set', 'add', 'on', 'off', 'clear', 'source_jids', 'target_jids', 'sources', 'targets', 'source', 'target', 'src', 'tgt', 'dest', 'type', 'types', 'status'];
-    if (keywords.includes(str)) return null;
-
-    const parts = str.split(/\s+/);
-    const lastPart = parts[parts.length - 1];
-    if (lastPart.endsWith('@g.us') || lastPart.endsWith('@s.whatsapp.net') || lastPart.endsWith('@newsletter') || lastPart.endsWith('@lid')) {
-        return lastPart;
-    }
-
-    const digits = str.replace(/\D/g, '');
-    if (!digits) return null;
-    if (digits.length >= 15) return `${digits}@g.us`;
-    if (digits.length >= 7) return `${digits}@s.whatsapp.net`;
-    return null;
-}
-
-const processedAutoForwardMsgSet = new Set();
-const autoForwardQueue = [];
-let isProcessingAutoForwardQueue = false;
-
-async function processAutoForwardQueue() {
-    if (isProcessingAutoForwardQueue || autoForwardQueue.length === 0) return;
-    isProcessingAutoForwardQueue = true;
-
-    while (autoForwardQueue.length > 0) {
-        const task = autoForwardQueue.shift();
-        const { kaif_sock, targetJids, relayMsg, kaif_origin, msgId } = task;
-
-        await Promise.all(targetJids.map(async (targetJid) => {
-            const cleanTarget = sanitizeJid(targetJid);
-            if (!cleanTarget) return;
-
-            const cleanOrigin = kaif_origin.trim().toLowerCase();
-            if (cleanTarget === cleanOrigin) return;
-
-            const tDigits = cleanTarget.replace(/\D/g, '');
-            const oDigits = cleanOrigin.replace(/\D/g, '');
-            if (tDigits && oDigits && tDigits === oDigits && !cleanTarget.endsWith('@g.us') && !cleanTarget.endsWith('@newsletter')) {
-                return;
-            }
-
-            try {
-                const itemRelayMsg = JSON.parse(JSON.stringify(relayMsg));
-                const targetBlocks = ['extendedTextMessage', 'imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'];
-                targetBlocks.forEach(block => {
-                    if (itemRelayMsg[block]) {
-                        if (itemRelayMsg[block].contextInfo) {
-                            delete itemRelayMsg[block].contextInfo.isForwarded;
-                            delete itemRelayMsg[block].contextInfo.forwardingScore;
-                            delete itemRelayMsg[block].contextInfo.forwardedNewsletterMessageInfo;
-                            delete itemRelayMsg[block].contextInfo.externalAdReply;
-                            delete itemRelayMsg[block].contextInfo.newsletterJid;
-                            delete itemRelayMsg[block].contextInfo.newsletterName;
-                            delete itemRelayMsg[block].contextInfo.newsletterServerMessageId;
-                            itemRelayMsg[block].contextInfo.isForwarded = false;
-                            itemRelayMsg[block].contextInfo.forwardingScore = 0;
-                        }
-                        delete itemRelayMsg[block].isForwarded;
-                        delete itemRelayMsg[block].forwardingScore;
-                    }
-                });
-
-                if (itemRelayMsg.contextInfo) {
-                    delete itemRelayMsg.contextInfo.isForwarded;
-                    delete itemRelayMsg.contextInfo.forwardingScore;
-                    delete itemRelayMsg.contextInfo.forwardedNewsletterMessageInfo;
-                    itemRelayMsg.contextInfo.isForwarded = false;
-                    itemRelayMsg.contextInfo.forwardingScore = 0;
-                }
-
-                await kaif_sock.relayMessage(cleanTarget, itemRelayMsg, {
-                    messageId: kaif_sock.generateMessageTag()
-                });
-                console.log(`🚀 [GLOBAL-FORWARD] Clean forwarded message ${msgId || ''} from ${kaif_origin} to ${cleanTarget}`);
-            } catch (err) {
-                console.error(`[GLOBAL-FORWARD] Failed for ${cleanTarget}:`, err.message);
-            }
-        }));
-    }
-
-    isProcessingAutoForwardQueue = false;
-}
-
-function enqueueAutoForward(item) {
-    autoForwardQueue.push(item);
-    processAutoForwardQueue().catch(err => {
-        console.error('[AUTO-FORWARD-QUEUE] Error:', err.message);
-        isProcessingAutoForwardQueue = false;
-    });
-}
-
-
 const wasi_app = express();
 const wasi_port = process.env.PORT || 3000;
 
@@ -399,35 +302,6 @@ async function handleGjidCommand(sock, from) {
     }
 }
 
-async function processCommand(sock, msg) {
-    const from = msg.key.remoteJid;
-    const text = msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        msg.message.imageMessage?.caption ||
-        msg.message.videoMessage?.caption ||
-        "";
-    
-    if (!text || !text.startsWith('!')) return;
-    
-            const command = text.trim();
-        const lowerCommand = command.toLowerCase();
-
-        try {
-            if (lowerCommand === '!ping') {
-                await handlePingCommand(sock, from);
-            }
-            else if (lowerCommand === '!jid') {
-                await handleJidCommand(sock, from);
-            }
-            else if (lowerCommand === '!gjid') {
-                await handleGjidCommand(sock, from);
-            }
-
-    } catch (error) {
-        console.error('Command execution error:', error);
-    }
-}
-
 // -----------------------------------------------------------------------------
 // SESSION MANAGEMENT
 // -----------------------------------------------------------------------------
@@ -495,158 +369,123 @@ async function startSession(sessionId) {
 
     wasi_sock.ev.on('creds.update', saveCreds);
 
-// Universal JID Cleaner
-const cleanJid = (id) => id ? id.split(':')[0].trim() : '';
+    // Universal JID Cleaner
+    const cleanJid = (id) => id ? id.split(':')[0].trim() : '';
 
-wasi_sock.ev.on('messages.upsert', async wasi_m => {
-    try {
-        const wasi_msg = wasi_m.messages[0];
-        if (!wasi_msg || !wasi_msg.message) return;
+    wasi_sock.ev.on('messages.upsert', async wasi_m => {
+        try {
+            const wasi_msg = wasi_m.messages[0];
+            if (!wasi_msg || !wasi_msg.message) return;
 
-        const rawFrom = wasi_msg.key.remoteJid;
-        const cleanFrom = cleanJid(rawFrom);
-        const msgContent = wasi_msg.message;
+            const rawFrom = wasi_msg.key.remoteJid;
+            const cleanFrom = cleanJid(rawFrom);
+            const msgContent = wasi_msg.message;
 
-        // Extract Text Properly
-        const msgText = (
-            msgContent.conversation || 
-            msgContent.extendedTextMessage?.text || 
-            msgContent.imageMessage?.caption || 
-            msgContent.videoMessage?.caption || 
-            ''
-        ).trim();
+            // Extract Text Properly
+            const msgText = (
+                msgContent.conversation || 
+                msgContent.extendedTextMessage?.text || 
+                msgContent.imageMessage?.caption || 
+                msgContent.videoMessage?.caption || 
+                ''
+            ).trim();
 
-        // 1. PING COMMAND
-        if (msgText.toLowerCase() === '!ping') {
-            await wasi_sock.sendMessage(rawFrom, { text: '⚡ Raju AutoForward Bot Online!' }, { quoted: wasi_msg });
-            return;
-        }
-
-        // 2. JID COMMAND
-        if (msgText.toLowerCase() === '!jid') {
-            await wasi_sock.sendMessage(rawFrom, { text: `📍 JID: ${rawFrom}` }, { quoted: wasi_msg });
-            return;
-        }
-        // 3. ALL GROUPS & COMMUNITIES JID LIST
-        if (msgText.toLowerCase() === '!gjid') {
-            try {
-                const getGroups = await wasi_sock.groupFetchAllParticipating();
-                const groups = Object.values(getGroups);
-
-                if (groups.length === 0) {
-                    await wasi_sock.sendMessage(rawFrom, { text: '❌ Koi group ya community nahi mili.' }, { quoted: wasi_msg });
-                    return;
-                }
-
-                let txt = '📌 *Groups List:*\n\n';
-                groups.forEach((g, i) => {
-                    const isComm = g.isCommunity || g.isCommunityAnnounce ? 'Community' : 'Group';
-                    txt += `${i + 1}. 📲 *${g.subject}*\n👥 Members: ${g.participants ? g.participants.length : 'N/A'}\n🆔 : \`${g.id}\`\n📝 Type: ${isComm}\n__________________\n\n`;
-                });
-
-                await wasi_sock.sendMessage(rawFrom, { text: txt }, { quoted: wasi_msg });
-            } catch (err) {
-                await wasi_sock.sendMessage(rawFrom, { text: `❌ Error: ${err.message}` }, { quoted: wasi_msg });
+            // 1. PING COMMAND
+            if (msgText.toLowerCase() === '!ping') {
+                await handlePingCommand(wasi_sock, rawFrom);
+                return;
             }
-            return;
-        }
-             
- // 1. GLOBAL AUTO FORWARD LOGIC (FAST & DIRECT)
-try {
-    if (!kaif_msg.key?.fromMe && kaif_origin !== 'status@broadcast') {
-        const globalCfg = await getCachedGlobalAutoForward(sessionId);
-        if (globalCfg?.enabled && globalCfg.targetJids?.length > 0) {
-            const msgId = kaif_msg.key?.id;
 
-            const isSourceMatched = (!globalCfg.sourceJids || globalCfg.sourceJids.length === 0) ||
-                globalCfg.sourceJids.some(s => {
-                    if (!s) return false;
-                    const cleanS = s.trim().toLowerCase();
-                    const cleanO = kaif_origin.trim().toLowerCase();
-                    if (cleanS === cleanO) return true;
+            // 2. JID COMMAND
+            if (msgText.toLowerCase() === '!jid') {
+                await handleJidCommand(wasi_sock, rawFrom);
+                return;
+            }
 
-                    if (kaif_sender && cleanS === kaif_sender.trim().toLowerCase()) return true;
-                    if (realPhoneJid && cleanS === realPhoneJid.trim().toLowerCase()) return true;
+            // 3. ALL GROUPS & COMMUNITIES JID LIST
+            if (msgText.toLowerCase() === '!gjid') {
+                await handleGjidCommand(wasi_sock, rawFrom);
+                return;
+            }
+                 
+            // =========================================================================
+            // ⚡ GLOBAL AUTO FORWARD LOGIC (UPDATED & CLEANED)
+            // =========================================================================
+            const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
+            if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
 
-                    const sDigits = cleanS.replace(/\D/g, '');
-                    const oDigits = cleanO.replace(/\D/g, '');
-                    if (sDigits && oDigits && sDigits === oDigits) return true;
+            const targetList = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
+            if (targetList.length === 0) return;
 
-                    const pDigits = (realPhoneJid || kaif_sender || '').replace(/\D/g, '');
-                    if (sDigits && pDigits && sDigits === pDigits) return true;
+            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document,sticker,text')
+                .toLowerCase()
+                .split(',')
+                .map(t => t.trim());
 
-                    return false;
-                });
+            const isVideo = !!(msgContent.videoMessage);
+            const isImage = !!(msgContent.imageMessage);
+            const isText = !!(msgContent.conversation || msgContent.extendedTextMessage);
+            const isDocument = !!(msgContent.documentMessage);
+            const isSticker = !!(msgContent.stickerMessage);
 
-            if (isSourceMatched) {
-                const validTargets = (globalCfg.targetJids || []).map(t => sanitizeJid(t)).filter(Boolean);
+            let shouldForward = false;
+            if (isVideo && allowedTypes.includes('video')) shouldForward = true;
+            if (isImage && allowedTypes.includes('image')) shouldForward = true;
+            if (isText && allowedTypes.includes('text')) shouldForward = true;
+            if (isDocument && allowedTypes.includes('document')) shouldForward = true;
+            if (isSticker && allowedTypes.includes('sticker')) shouldForward = true;
 
-                if (validTargets.length > 0) {
-                    if (msgId && processedAutoForwardMsgSet.has(msgId)) {
-                        // Already processed
-                    } else {
-                        if (msgId) {
-                            processedAutoForwardMsgSet.add(msgId);
-                            if (processedAutoForwardMsgSet.size > 1000) {
-                                const firstVal = processedAutoForwardMsgSet.values().next().value;
-                                processedAutoForwardMsgSet.delete(firstVal);
-                            }
-                        }
+            if (shouldForward) {
+                for (const targetJid of targetList) {
+                    let success = false;
 
-                        let relayMsg = processAndCleanMessage(
-                            kaif_msg.message,
-                            globalCfg?.oldTextRegex || null,
-                            globalCfg?.newText !== undefined ? globalCfg.newText : null
-                        );
+                    // 3 times retry mechanism with custom sender name/participant
+                    for (let attempt = 1; attempt <= 3; attempt++) {
+                        try {
+                            let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
 
-                        if (relayMsg?.viewOnceMessageV2) relayMsg = relayMsg.viewOnceMessageV2.message;
-                        if (relayMsg?.viewOnceMessage) relayMsg = relayMsg.viewOnceMessage.message;
-                        if (relayMsg?.viewOnceMessageV2Extension) relayMsg = relayMsg.viewOnceMessageV2Extension.message;
-                        if (relayMsg?.ephemeralMessage) relayMsg = relayMsg.ephemeralMessage.message;
-
-                        let shouldForward = true;
-                        if (relayMsg?.imageMessage && globalCfg.forwardPicture === false) shouldForward = false;
-                        else if (relayMsg?.videoMessage && globalCfg.forwardVideo === false) shouldForward = false;
-                        else if (relayMsg?.audioMessage && globalCfg.forwardAudio === false) shouldForward = false;
-                        else if (relayMsg?.documentMessage && globalCfg.forwardDocument === false) shouldForward = false;
-                        else if ((relayMsg?.conversation || relayMsg?.extendedTextMessage) && globalCfg.forwardText === false) shouldForward = false;
-
-                        if (shouldForward && relayMsg) {
-                            if (globalCfg.autoForwardTimestamp) {
-                                const timeStr = '\n\n_[' + new Date().toLocaleTimeString() + ']_';
-                                if (relayMsg.conversation) relayMsg.conversation += timeStr;
-                                else if (relayMsg.extendedTextMessage?.text) relayMsg.extendedTextMessage.text += timeStr;
-                                else if (relayMsg.imageMessage) relayMsg.imageMessage.caption = (relayMsg.imageMessage.caption || '') + timeStr;
-                                else if (relayMsg.videoMessage) relayMsg.videoMessage.caption = (relayMsg.videoMessage.caption || '') + timeStr;
-                                else if (relayMsg.documentMessage) relayMsg.documentMessage.caption = (relayMsg.documentMessage.caption || '') + timeStr;
+                            for (const type of Object.keys(cleanMessage)) {
+                                if (cleanMessage[type]?.contextInfo) {
+                                    delete cleanMessage[type].contextInfo.forwardingScore;
+                                    delete cleanMessage[type].contextInfo.isForwarded;
+                                    
+                                    // Custom sender tag configuration
+                                    cleanMessage[type].contextInfo.participant = "Raju Boss +923071782626";
+                                }
                             }
 
-                            enqueueAutoForward({
-                                kaif_sock,
-                                targetJids: [...new Set(validTargets)],
-                                relayMsg,
-                                kaif_origin,
-                                msgId
-                            });
+                            try {
+                                await wasi_sock.sendMessage(targetJid, cleanMessage);
+                            } catch (mediaErr) {
+                                await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
+                            }
+
+                            console.log(`[+] Message forwarded to ${targetJid}`);
+                            success = true;
+                            break;
+                        } catch (err) {
+                            console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
+                            if (attempt < 3) await new Promise(res => setTimeout(res, 4000));
                         }
+                    }
+                        
+                    // Delay only for videos to prevent rate limits
+                    if (isVideo) {
+                        await new Promise(res => setTimeout(res, 2000));
                     }
                 }
             }
+
+        } catch (e) {
+            console.error('❌ General Error:', e.message);
         }
-    }
-  } catch (err) {
-      console.error('[GLOBAL-AUTO-FORWARD] Error:', err.message);
-  }
-});
-
+    });
+}
 
 // ============================================================
-// 🚀 ALL APIS (ADD THESE TO YOUR INDEX.JS)
+// 🚀 ALL APIS
 // ============================================================
 
-// -----------------------------------------------------------------------------
-// API: GET STATUS
-// -----------------------------------------------------------------------------
 wasi_app.get('/api/status', async (req, res) => {
     const sessionId = req.query.sessionId || config.sessionId || 'wasi_session';
     const session = sessions.get(sessionId);
@@ -655,11 +494,9 @@ wasi_app.get('/api/status', async (req, res) => {
     let connected = false;
     let dbConnected = false;
 
-    // Check database connection
     if (config.mongoDbUrl) {
         try {
-            // You can add your actual DB check here
-            dbConnected = true; // Placeholder - replace with actual check
+            dbConnected = true;
         } catch (e) {
             dbConnected = false;
         }
@@ -686,14 +523,9 @@ wasi_app.get('/api/status', async (req, res) => {
     });
 });
 
-// -----------------------------------------------------------------------------
-// API: RESTART BOT
-// -----------------------------------------------------------------------------
 wasi_app.post('/api/restart', async (req, res) => {
     try {
         console.log('🔄 Restarting bot...');
-        
-        // Clear all sessions
         for (const [sessionId, session] of sessions) {
             if (session.sock) {
                 try {
@@ -705,7 +537,6 @@ wasi_app.post('/api/restart', async (req, res) => {
         }
         sessions.clear();
         
-        // Restart the main function after a delay
         setTimeout(() => {
             main().catch(err => console.error('Restart error:', err));
         }, 1000);
@@ -717,9 +548,6 @@ wasi_app.post('/api/restart', async (req, res) => {
     }
 });
 
-// -----------------------------------------------------------------------------
-// API: LOGOUT
-// -----------------------------------------------------------------------------
 wasi_app.post('/api/logout', async (req, res) => {
     try {
         const sessionId = req.query.sessionId || config.sessionId || 'wasi_session';
@@ -742,9 +570,6 @@ wasi_app.post('/api/logout', async (req, res) => {
     }
 });
 
-// -----------------------------------------------------------------------------
-// API: GET SESSIONS LIST
-// -----------------------------------------------------------------------------
 wasi_app.get('/api/sessions', async (req, res) => {
     try {
         const sessionList = Array.from(sessions.keys()).map(id => ({
@@ -761,10 +586,7 @@ wasi_app.get('/api/sessions', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
-}
-// -----------------------------------------------------------------------------
-// API: HEALTH CHECK
-// -----------------------------------------------------------------------------
+
 wasi_app.get('/api/health', async (req, res) => {
     res.json({
         status: 'ok',
@@ -774,10 +596,6 @@ wasi_app.get('/api/health', async (req, res) => {
         sessions: sessions.size
     });
 });
-
-// ============================================================
-// END OF APIS
-// ============================================================
 
 // -----------------------------------------------------------------------------
 // SERVER START
@@ -801,7 +619,6 @@ function wasi_startServer() {
 // MAIN STARTUP
 // -----------------------------------------------------------------------------
 async function main() {
-    // 1. Connect DB if configured
     if (config.mongoDbUrl) {
         const dbResult = await wasi_connectDatabase(config.mongoDbUrl);
         if (dbResult) {
@@ -809,21 +626,18 @@ async function main() {
         }
     }
 
-    // 2. Start default session
     const sessionId = config.sessionId || 'wasi_session';
     await startSession(sessionId);
 
-    // 3. Start server
     wasi_startServer();
 }
-// Auto memory check and clean restart
+
 setInterval(() => {
     const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024;
     if (memoryUsage > 450) {
         console.log(`⚠️ High Memory Usage detected (${Math.round(memoryUsage)}MB). Restarting process...`);
-        process.exit(0); // Heroku will automatically restart the dyno
+        process.exit(0);
     }
 }, 5 * 60 * 1000);
-
 
 main();
