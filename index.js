@@ -79,53 +79,6 @@ const NEW_TEXT = process.env.NEW_TEXT
 // -----------------------------------------------------------------------------
 // HELPER FUNCTIONS FOR MESSAGE CLEANING
 // -----------------------------------------------------------------------------
-
-function cleanForwardedLabel(message) {
-    try {
-        let cleanedMessage = JSON.parse(JSON.stringify(message));
-        
-        if (cleanedMessage.extendedTextMessage?.contextInfo) {
-            cleanedMessage.extendedTextMessage.contextInfo.isForwarded = false;
-            if (cleanedMessage.extendedTextMessage.contextInfo.forwardingScore) {
-                cleanedMessage.extendedTextMessage.contextInfo.forwardingScore = 0;
-            }
-        }
-        
-        if (cleanedMessage.imageMessage?.contextInfo) {
-            cleanedMessage.imageMessage.contextInfo.isForwarded = false;
-            if (cleanedMessage.imageMessage.contextInfo.forwardingScore) {
-                cleanedMessage.imageMessage.contextInfo.forwardingScore = 0;
-            }
-        }
-        
-        if (cleanedMessage.videoMessage?.contextInfo) {
-            cleanedMessage.videoMessage.contextInfo.isForwarded = false;
-            if (cleanedMessage.videoMessage.contextInfo.forwardingScore) {
-                cleanedMessage.videoMessage.contextInfo.forwardingScore = 0;
-            }
-        }
-        
-        if (cleanedMessage.audioMessage?.contextInfo) {
-            cleanedMessage.audioMessage.contextInfo.isForwarded = false;
-            if (cleanedMessage.audioMessage.contextInfo.forwardingScore) {
-                cleanedMessage.audioMessage.contextInfo.forwardingScore = 0;
-            }
-        }
-        
-        if (cleanedMessage.documentMessage?.contextInfo) {
-            cleanedMessage.documentMessage.contextInfo.isForwarded = false;
-            if (cleanedMessage.documentMessage.contextInfo.forwardingScore) {
-                cleanedMessage.documentMessage.contextInfo.forwardingScore = 0;
-            }
-        }
-        
-        return cleanedMessage;
-    } catch (error) {
-        console.error('Error cleaning forwarded label:', error);
-        return message;
-    }
-}
-
 function cleanNewsletterText(text) {
     if (!text) return text;
     
@@ -220,6 +173,7 @@ async function startSession(sessionId) {
         qr: null,
         reconnectAttempts: 0,
     };
+    sessions.messages = sessions.messages || new Map();
     sessions.set(sessionId, sessionState);
 
     const { wasi_sock, saveCreds } = await wasi_connectSession(false, sessionId);
@@ -288,7 +242,7 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ GLOBAL AUTO FORWARD LOGIC
+            // ⚡ UNIVERSAL GLOBAL AUTO FORWARD LOGIC (ALL COUNTRIES & ALBUMS FIXED)
             // =========================================================================
             const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
             if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
@@ -296,32 +250,14 @@ async function startSession(sessionId) {
             const targetList = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
             if (targetList.length === 0) return;
 
-            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document,sticker,text,buttonsMessage,templateMessage,listMessage')
-                .toLowerCase()
-                .split(',')
-                .map(t => t.trim());
-
-            const isVideo = !!(msgContent.videoMessage || msgContent.ephemeralMessage?.message?.videoMessage || msgContent.viewOnceMessage?.message?.videoMessage || msgContent.viewOnceMessageV2?.message?.videoMessage);
-            const isImage = !!(msgContent.imageMessage || msgContent.ephemeralMessage?.message?.imageMessage || msgContent.viewOnceMessage?.message?.imageMessage || msgContent.viewOnceMessageV2?.message?.imageMessage);
-            const isText = !!(msgContent.conversation || msgContent.extendedTextMessage || msgContent.ephemeralMessage?.message?.conversation || msgContent.ephemeralMessage?.message?.extendedTextMessage);
-            const isDocument = !!(msgContent.documentMessage || msgContent.ephemeralMessage?.message?.documentMessage);
-            const isSticker = !!(msgContent.stickerMessage || msgContent.ephemeralMessage?.message?.stickerMessage);
-            const isAlbum = !!(msgContent.groupInviteMessage || msgContent.pollCreationMessage || msgContent.buttonsMessage || msgContent.templateMessage || msgContent.listMessage || msgContent.reactionMessage || msgContent.albumMessage);
-
-            let shouldForward = false;
-            if (isVideo && allowedTypes.includes('video')) shouldForward = true;
-            if (isImage && allowedTypes.includes('image')) shouldForward = true;
-            if (isText && allowedTypes.includes('text')) shouldForward = true;
-            if (isDocument && allowedTypes.includes('document')) shouldForward = true;
-            if (isSticker && allowedTypes.includes('sticker')) shouldForward = true;
-            if (isAlbum) shouldForward = true;
-
-            if (shouldForward) {
+            // Har qisam ki incoming post/message ko baghair kisi restriction ke allow karna
+            if (wasi_msg.message) {
                 for (const targetJid of targetList) {
                     for (let attempt = 1; attempt <= 3; attempt++) {
                         try {
                             let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
 
+                            // Context info clean karke forwarding tag remove karna aur international numbers handle karna
                             const cleanContext = (obj) => {
                                 if (!obj || typeof obj !== 'object') return;
                                 if (obj.contextInfo) {
@@ -337,23 +273,23 @@ async function startSession(sessionId) {
                             };
                             cleanContext(cleanMessage);
 
+                            // Pehle direct send karne ki koshish, agar fail ho toh relayMessage use ho ga jo albums/heavy media ke liye behtareen hai
                             try {
                                 await wasi_sock.sendMessage(targetJid, cleanMessage);
                             } catch (mediaErr) {
                                 await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
                             }
 
-                            console.log(`[+] Message forwarded to ${targetJid}`);
+                            console.log(`[+] Universal Post successfully forwarded to ${targetJid}`);
                             break;
                         } catch (err) {
                             console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
                             if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
                         }
                     }
-                        
-                    if (isVideo || isAlbum) {
-                        await new Promise(res => setTimeout(res, 2000));
-                    }
+                    
+                    // Har message ke baad thoda gap taake rate limit na aaye
+                    await new Promise(res => setTimeout(res, 1500));
                 }
             }
 
@@ -449,12 +385,12 @@ wasi_app.get('/api/health', async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// SERVER START (Single instance to prevent port clash crash)
+// SERVER START
 // -----------------------------------------------------------------------------
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`📡 Auto Forward Active`);
+        console.log(`📡 Universal Auto Forward Active for All Countries & Albums`);
     });
 }
 
