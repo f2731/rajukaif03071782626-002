@@ -103,7 +103,7 @@ function replaceCaption(caption) {
     
     let result = caption;
     OLD_TEXT_REGEX.forEach(regex => {
-        result = result.,replace(regex, NEW_TEXT);
+        result = result.replace(regex, NEW_TEXT);
     });
     return result;
 }
