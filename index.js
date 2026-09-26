@@ -17,13 +17,23 @@ const config = require('./wasi');
 const { cleanTempFiles } = require('./wasilib/cleaner');
 
 // Load persistent config
+const CONFIG_FILE = path.join(__dirname, 'botConfig.json');
 try {
-    if (fs.existsSync(path.join(__dirname, 'botConfig.json'))) {
-        const savedConfig = JSON.parse(fs.readFileSync(path.join(__dirname, 'botConfig.json')));
+    if (fs.existsSync(CONFIG_FILE)) {
+        const savedConfig = JSON.parse(fs.readFileSync(CONFIG_FILE));
         Object.assign(config, savedConfig);
     }
 } catch (e) {
     console.error('Failed to load botConfig.json:', e);
+}
+
+// Helper to save config state
+function saveBotConfig() {
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    } catch (e) {
+        console.error('Failed to save botConfig.json:', e);
+    }
 }
 
 const wasi_app = express();
@@ -211,7 +221,6 @@ async function startSession(sessionId) {
         qr: null,
         reconnectAttempts: 0,
     };
-    sessions.messages = sessions.messages || new Map();
     sessions.set(sessionId, sessionState);
 
     const { wasi_sock, saveCreds } = await wasi_connectSession(false, sessionId);
@@ -255,8 +264,10 @@ async function startSession(sessionId) {
             if (!wasi_msg || !wasi_msg.message) return;
 
             const rawFrom = wasi_msg.key.remoteJid;
+            const isGroup = rawFrom.endsWith('@g.us');
             const cleanFrom = cleanJid(rawFrom);
             const msgContent = wasi_msg.message;
+            const senderJid = wasi_msg.key.participant || wasi_msg.key.remoteJid;
 
             const msgText = (
                 msgContent.conversation || 
@@ -281,6 +292,44 @@ async function startSession(sessionId) {
             if (msgText.toLowerCase() === '!fullpp' || msgText.toLowerCase() === 'fullpp') {
                 await handleFullPpCommand(wasi_sock, wasi_msg, rawFrom);
                 return;
+            }
+
+            // -------------------------------------------------------------------------
+            // ⚙️ ANTILINK ON / OFF COMMANDS (Only Bot Owner or Admin can toggle)
+            // -------------------------------------------------------------------------
+            if (msgText.toLowerCase() === '!antilink on') {
+                config.antiLinkEnabled = true;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link & Anti-Text Kick Protection has been enabled (ON)!' }, { quoted: wasi_msg });
+                return;
+            }
+            if (msgText.toLowerCase() === '!antilink off') {
+                config.antiLinkEnabled = false;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link & Anti-Text Kick Protection has been disabled (OFF)!' }, { quoted: wasi_msg });
+                return;
+            }
+
+            // =========================================================================
+            // 🛡️ ANTI-TEXT & ANTI-LINK PROTECTION (KICK & DELETE) - IF ENABLED
+            // =========================================================================
+            if (config.antiLinkEnabled && isGroup && !wasi_msg.key.fromMe) {
+                const hasLink = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+\b/i.test(msgText) || msgText.includes('wa.me/');
+                const isPlainOrLinkText = !!(msgContent.conversation || msgContent.extendedTextMessage);
+
+                if (hasLink || isPlainOrLinkText) {
+                    try {
+                        // 1. Delete the unwanted text/link message
+                        await wasi_sock.sendMessage(rawFrom, { delete: wasi_msg.key });
+
+                        // 2. Kick the sender from the group
+                        await wasi_sock.groupParticipantsUpdate(rawFrom, [senderJid], 'remove');
+                        console.log(`[!] Removed user ${senderJid} for sending text/link in group ${rawFrom}`);
+                        return; // Stop further processing for this message
+                    } catch (err) {
+                        console.error('❌ Anti-text/link kick error (Make sure bot is admin):', err.message);
+                    }
+                }
             }
                  
             // =========================================================================
@@ -416,6 +465,7 @@ wasi_app.post('/api/logout', async (req, res) => {
         
         res.json({ success: true, message: 'Logged out successfully' });
     } catch (error) {
+        console.error('Logout error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -444,7 +494,7 @@ wasi_app.get('/api/health', async (req, res) => {
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`📡 Forward-Type Filter Active (Video, Image, Document Only)`);
+        console.log(`🛡️ Anti-Text & Anti-Link Commands Added (!antilink on / !antilink off)`);
     });
 }
 
