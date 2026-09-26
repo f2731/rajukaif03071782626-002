@@ -239,9 +239,8 @@ async function startSession(sessionId) {
             const cleanFrom = cleanJid(rawFrom);
             const msgContent = wasi_msg.message;
             const senderJid = wasi_msg.key.participant || wasi_msg.key.remoteJid;
-            const botOwnerJid = wasi_sock.user.id; // Bot owner ka personal chat JID
+            const botOwnerJid = wasi_sock.user.id;
 
-            // Save message in store for anti-delete feature (Keep last 500 messages)
             if (wasi_msg.key && wasi_msg.key.id) {
                 messageStore.set(wasi_msg.key.id, {
                     msg: wasi_msg,
@@ -250,7 +249,6 @@ async function startSession(sessionId) {
                     timestamp: Date.now()
                 });
                 
-                // Limit store size to prevent high memory usage
                 if (messageStore.size > 500) {
                     const oldestKey = messageStore.keys().next().value;
                     messageStore.delete(oldestKey);
@@ -267,18 +265,14 @@ async function startSession(sessionId) {
             if (viewOnceMsg) {
                 try {
                     console.log(`[!] View Once message detected from ${senderJid} in ${rawFrom}`);
-                    let decryptedMsg = viewOnceMsg;
-                    
-                    // Convert View Once back to normal media message object
                     let mediaType = Object.keys(viewOnceMsg)[0];
                     if (viewOnceMsg[mediaType]) {
-                        viewOnceMsg[mediaType].viewOnce = false; // Remove view once restriction
+                        viewOnceMsg[mediaType].viewOnce = false;
                     }
 
                     let captionText = viewOnceMsg[mediaType]?.caption || '';
                     let notificationText = `🔓 *Anti-View Once Caught!*\n👤 *From:* @${senderJid.split('@')[0]}\n📍 *Chat:* ${isGroup ? 'Group' : 'Personal'}\n${captionText ? `📝 *Caption:* ${captionText}` : ''}`;
 
-                    // Send notification and media to bot owner's personal chat (or current chat if it's personal)
                     const sendTarget = isGroup ? botOwnerJid : rawFrom;
                     
                     await wasi_sock.sendMessage(sendTarget, { text: notificationText, mentions: [senderJid] });
@@ -432,7 +426,6 @@ async function startSession(sessionId) {
     wasi_sock.ev.on('messages.update', async (updates) => {
         try {
             for (const update of updates) {
-                // Check if message was revoked/deleted for everyone
                 if (update.update && update.update.message === null) {
                     const msgId = update.key.id;
                     const storedData = messageStore.get(msgId);
@@ -443,7 +436,6 @@ async function startSession(sessionId) {
                         const chatJid = storedData.rawFrom;
                         const botOwnerJid = wasi_sock.user.id;
 
-                        // Don't trigger if bot itself deleted its own message
                         if (deletedMsg.key.fromMe) return;
 
                         console.log(`[!] Deleted message caught from ${senderJid} in chat ${chatJid}`);
@@ -459,10 +451,8 @@ async function startSession(sessionId) {
                                            `📍 *Chat/Group ID:* \`${chatJid}\`\n` +
                                            `💬 *Deleted Text/Content:* ${textContent}`;
 
-                        // Send alert and forwarded deleted message directly to bot owner's personal chat
                         await wasi_sock.sendMessage(botOwnerJid, { text: alertMessage, mentions: [senderJid] });
                         
-                        // Forward the actual deleted media/text message to owner as well
                         try {
                             await wasi_sock.sendMessage(botOwnerJid, { forward: deletedMsg });
                         } catch (fwdErr) {
@@ -523,7 +513,7 @@ wasi_app.post('/api/restart', async (req, res) => {
         setTimeout(() => { main().catch(err => console.error(err)); }, 1000);
         res.json({ success: true, message: 'Bot restarting...' });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message exact: false });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
