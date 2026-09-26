@@ -295,23 +295,23 @@ async function startSession(sessionId) {
             }
 
             // -------------------------------------------------------------------------
-            // ⚙️ ANTILINK ON / OFF COMMANDS (Only Bot Owner or Admin can toggle)
+            // ⚙️ ANTILINK ON / OFF COMMANDS
             // -------------------------------------------------------------------------
             if (msgText.toLowerCase() === '!antilink on') {
                 config.antiLinkEnabled = true;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link & Anti-Text Kick Protection has been enabled (ON)!' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link & Anti-Text Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
                 config.antiLinkEnabled = false;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link & Anti-Text Kick Protection has been disabled (OFF)!' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link & Anti-Text Protection has been disabled (OFF)!' }, { quoted: wasi_msg });
                 return;
             }
 
             // =========================================================================
-            // 🛡️ ANTI-TEXT & ANTI-LINK PROTECTION (KICK & DELETE) - IF ENABLED
+            // 🛡️ ANTI-TEXT & ANTI-LINK PROTECTION (BYPASS FOR ADMINS - NO DELETE / NO KICK)
             // =========================================================================
             if (config.antiLinkEnabled && isGroup && !wasi_msg.key.fromMe) {
                 const hasLink = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+\b/i.test(msgText) || msgText.includes('wa.me/');
@@ -319,12 +319,24 @@ async function startSession(sessionId) {
 
                 if (hasLink || isPlainOrLinkText) {
                     try {
-                        // 1. Delete the unwanted text/link message
+                        // Check if sender is group admin or superadmin
+                        const groupMetadata = await wasi_sock.groupMetadata(rawFrom);
+                        const participants = groupMetadata.participants || [];
+                        const senderParticipant = participants.find(p => p.id === senderJid);
+                        const isAdmin = senderParticipant && (senderParticipant.admin === 'admin' || senderParticipant.admin === 'superadmin');
+
+                        if (isAdmin) {
+                            // Agar sender admin hai toh kuch nahi karega (message delete bhi nahi hoga, kick bhi nahi)
+                            console.log(`[!] Admin ${senderJid} sent link/text in group ${rawFrom}. Bypassed completely.`);
+                            return; 
+                        }
+
+                        // 1. Delete the unwanted text/link message from normal member
                         await wasi_sock.sendMessage(rawFrom, { delete: wasi_msg.key });
 
                         // 2. Kick the sender from the group
                         await wasi_sock.groupParticipantsUpdate(rawFrom, [senderJid], 'remove');
-                        console.log(`[!] Removed user ${senderJid} for sending text/link in group ${rawFrom}`);
+                        console.log(`[!] Removed normal member ${senderJid} for sending text/link in group ${rawFrom}`);
                         return; // Stop further processing for this message
                     } catch (err) {
                         console.error('❌ Anti-text/link kick error (Make sure bot is admin):', err.message);
@@ -494,7 +506,7 @@ wasi_app.get('/api/health', async (req, res) => {
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Anti-Text & Anti-Link Commands Added (!antilink on / !antilink off)`);
+        console.log(`🛡️ Anti-Link & Anti-Text Protection Configured (Admins Completely Bypassed)`);
     });
 }
 
