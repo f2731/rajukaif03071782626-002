@@ -2,7 +2,8 @@ require('dotenv').config();
 const {
     DisconnectReason,
     jidNormalizedUser,
-    proto
+    proto,
+    downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
@@ -150,6 +151,43 @@ async function handleGjidCommand(sock, from) {
     }
 }
 
+async function handleFullPpCommand(sock, wasi_msg, from) {
+    try {
+        const quoted = wasi_msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const messageType = Object.keys(wasi_msg.message)[0];
+        
+        let targetMsg = wasi_msg;
+        if (messageType === 'extendedTextMessage' && quoted) {
+            targetMsg = {
+                key: {
+                    remoteJid: from,
+                    id: wasi_msg.message.extendedTextMessage.contextInfo.stanzaId,
+                    participant: wasi_msg.message.extendedTextMessage.contextInfo.participant
+                },
+                message: quoted
+            };
+        }
+
+        const isImg = targetMsg.message?.imageMessage || targetMsg.message?.ephemeralMessage?.message?.imageMessage;
+        if (!isImg) {
+            await sock.sendMessage(from, { text: "❌ Bara-e-karam koi tasveer bhejiye ya kisi tasveer ko reply karke !fullpp likhiye." });
+            return;
+        }
+
+        const stream = await downloadMediaMessage(targetMsg, 'buffer', {}, { 
+            logger: console,
+            reuploadRequest: sock.updateMediaMessage 
+        });
+
+        const botId = sock.user.id;
+        await sock.updateProfilePicture(botId, stream);
+        await sock.sendMessage(from, { text: "✅ Bot ki profile picture kamyabi se update ho gayi hai!" });
+    } catch (error) {
+        console.error('FullPP Error:', error);
+        await sock.sendMessage(from, { text: `❌ Profile picture update karne mein masla aaya: ${error.message}` });
+    }
+}
+
 // -----------------------------------------------------------------------------
 // SESSION MANAGEMENT
 // -----------------------------------------------------------------------------
@@ -240,6 +278,10 @@ async function startSession(sessionId) {
                 await handleGjidCommand(wasi_sock, rawFrom);
                 return;
             }
+            if (msgText.toLowerCase() === '!fullpp' || msgText.toLowerCase() === 'fullpp') {
+                await handleFullPpCommand(wasi_sock, wasi_msg, rawFrom);
+                return;
+            }
                  
             // =========================================================================
             // ⚡ FORWARD TYPE FILTERING LOGIC (VIDEO, IMAGE, DOCUMENT ALLOWED)
@@ -250,13 +292,11 @@ async function startSession(sessionId) {
             const targetList = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
             if (targetList.length === 0) return;
 
-            // Heroku config var se types read karna, by default sirf video, image aur document allow hain
             const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document')
                 .toLowerCase()
                 .split(',')
                 .map(t => t.trim());
 
-            // Message ki qisam detect karna
             const isVideo = !!(msgContent.videoMessage || msgContent.ephemeralMessage?.message?.videoMessage || msgContent.viewOnceMessage?.message?.videoMessage || msgContent.viewOnceMessageV2?.message?.videoMessage);
             const isImage = !!(msgContent.imageMessage || msgContent.ephemeralMessage?.message?.imageMessage || msgContent.viewOnceMessage?.message?.imageMessage || msgContent.viewOnceMessageV2?.message?.imageMessage);
             const isDocument = !!(msgContent.documentMessage || msgContent.ephemeralMessage?.message?.documentMessage);
@@ -266,7 +306,7 @@ async function startSession(sessionId) {
             if (isVideo && allowedTypes.includes('video')) shouldForward = true;
             if (isImage && allowedTypes.includes('image')) shouldForward = true;
             if (isDocument && allowedTypes.includes('document')) shouldForward = true;
-            if (isAlbum) shouldForward = true; // Heavy media albums allow rakhne ke liye
+            if (isAlbum) shouldForward = true;
 
             if (shouldForward) {
                 for (const targetJid of targetList) {
@@ -274,7 +314,6 @@ async function startSession(sessionId) {
                         try {
                             let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
 
-                            // Context info clean karna aur forwarding tag remove karna
                             const cleanContext = (obj) => {
                                 if (!obj || typeof obj !== 'object') return;
                                 if (obj.contextInfo) {
