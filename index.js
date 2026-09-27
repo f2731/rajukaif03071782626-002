@@ -42,10 +42,9 @@ const wasi_port = process.env.PORT || 3000;
 const QRCode = require('qrcode');
 
 // -----------------------------------------------------------------------------
-// GLOBAL SESSION STATE & MESSAGE STORE (FOR ANTI-DELETE / VIEW ONCE)
+// SESSION STATE
 // -----------------------------------------------------------------------------
 const sessions = new Map();
-const messageStore = new Map(); // Global message store for Personal & Group chats
 
 // Middleware
 wasi_app.use(express.json());
@@ -53,6 +52,7 @@ wasi_app.use(express.static(path.join(__dirname, 'public')));
 
 // Keep-Alive Route
 wasi_app.get('/ping', (req, res) => res.status(200).send('pong'));
+// Auto Clear Memory every 30 minutes
 setInterval(() => {
     try {
         cleanTempFiles(true);
@@ -71,6 +71,53 @@ const SOURCE_JIDS = process.env.SOURCE_JIDS
 const TARGET_JIDS = process.env.TARGET_JIDS
     ? process.env.TARGET_JIDS.split(',')
     : [];
+
+const OLD_TEXT_REGEX = process.env.OLD_TEXT_REGEX
+    ? process.env.OLD_TEXT_REGEX.split(',').map(pattern => {
+        try {
+            return pattern.trim() ? new RegExp(pattern.trim(), 'gu') : null;
+        } catch (e) {
+            console.error(`Invalid regex pattern: ${pattern}`, e);
+            return null;
+        }
+      }).filter(regex => regex !== null)
+    : [];
+
+const NEW_TEXT = process.env.NEW_TEXT
+    ? process.env.NEW_TEXT
+    : '';
+
+// -----------------------------------------------------------------------------
+// HELPER FUNCTIONS FOR MESSAGE CLEANING
+// -----------------------------------------------------------------------------
+function cleanNewsletterText(text) {
+    if (!text) return text;
+    
+    const newsletterMarkers = [
+        /📢\s*/g, /🔔\s*/g, /📰\s*/g, /🗞️\s*/g,
+        /\[NEWSLETTER\]/gi, /\[BROADCAST\]/gi, /\[ANNOUNCEMENT\]/gi,
+        /Newsletter:/gi, /Broadcast:/gi, /Announcement:/gi,
+        /Forwarded many times/gi, /Forwarded message/gi, /This is a broadcast message/gi
+    ];
+    
+    let cleanedText = text;
+    newsletterMarkers.forEach(marker => {
+        cleanedText = cleanedText.replace(marker, '');
+    });
+    
+    return cleanedText.trim();
+}
+
+function replaceCaption(caption) {
+    if (!caption) return caption;
+    if (!OLD_TEXT_REGEX.length || !NEW_TEXT) return caption;
+    
+    let result = caption;
+    OLD_TEXT_REGEX.forEach(regex => {
+        result = result.replace(regex, NEW_TEXT);
+    });
+    return result;
+}
 
 // -----------------------------------------------------------------------------
 // COMMAND HANDLER FUNCTIONS
@@ -211,9 +258,6 @@ async function startSession(sessionId) {
 
     const cleanJid = (id) => id ? id.split(':')[0].trim() : '';
 
-    // -----------------------------------------------------------------------------
-    // 1. MESSAGE STORE & VIEW ONCE LISTENER
-    // -----------------------------------------------------------------------------
     wasi_sock.ev.on('messages.upsert', async wasi_m => {
         try {
             const wasi_msg = wasi_m.messages[0];
@@ -224,49 +268,6 @@ async function startSession(sessionId) {
             const cleanFrom = cleanJid(rawFrom);
             const msgContent = wasi_msg.message;
             const senderJid = wasi_msg.key.participant || wasi_msg.key.remoteJid;
-            const botOwnerJid = wasi_sock.user.id;
-
-            // Save message in store for Anti-Delete feature (Both Group & Personal)
-            if (wasi_msg.key && wasi_msg.key.id) {
-                messageStore.set(wasi_msg.key.id, {
-                    msg: wasi_msg,
-                    rawFrom: rawFrom,
-                    senderJid: senderJid,
-                    timestamp: Date.now()
-                });
-                
-                if (messageStore.size > 1000) {
-                    const oldestKey = messageStore.keys().next().value;
-                    messageStore.delete(oldestKey);
-                }
-            }
-
-            // =========================================================================
-            // 👀 ANTI-VIEW ONCE CATCHER
-            // =========================================================================
-            const viewOnceMsg = msgContent.viewOnceMessage?.message || 
-                                msgContent.viewOnceMessageV2?.message || 
-                                msgContent.ephemeralMessage?.message?.viewOnceMessage?.message;
-
-            if (viewOnceMsg && (config.antiViewEnabled !== false)) {
-                try {
-                    console.log(`[!] View Once message detected from ${senderJid} in ${rawFrom}`);
-                    let mediaType = Object.keys(viewOnceMsg)[0];
-                    if (viewOnceMsg[mediaType]) {
-                        viewOnceMsg[mediaType].viewOnce = false;
-                    }
-
-                    let captionText = viewOnceMsg[mediaType]?.caption || '';
-                    let notificationText = `🔓 *Anti-View Once Caught!*\n👤 *From:* @${senderJid.split('@')[0]}\n📍 *Chat:* ${isGroup ? 'Group' : 'Personal'}\n${captionText ? `📝 *Caption:* ${captionText}` : ''}`;
-
-                    const sendTarget = isGroup ? botOwnerJid : rawFrom;
-                    
-                    await wasi_sock.sendMessage(sendTarget, { text: notificationText, mentions: [senderJid] });
-                    await wasi_sock.sendMessage(sendTarget, { forward: wasi_msg });
-                } catch (voErr) {
-                    console.error('❌ Anti-View Once Error:', voErr.message);
-                }
-            }
 
             const msgText = (
                 msgContent.conversation || 
@@ -294,49 +295,23 @@ async function startSession(sessionId) {
             }
 
             // -------------------------------------------------------------------------
-            // ⚙️ ANTILINK / ANTIDELETE / ANTIVIEW COMMANDS
+            // ⚙️ ANTILINK ON / OFF COMMANDS
             // -------------------------------------------------------------------------
             if (msgText.toLowerCase() === '!antilink on') {
                 config.antiLinkEnabled = true;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link Protection has been enabled (ON)!' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link & Anti-Text Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
                 config.antiLinkEnabled = false;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link Protection has been disabled (OFF)!' }, { quoted: wasi_msg });
-                return;
-            }
-
-            if (msgText.toLowerCase() === '!antidelete on') {
-                config.antiDeleteEnabled = true;
-                saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Delete feature is now ENABLED (ON)!' }, { quoted: wasi_msg });
-                return;
-            }
-            if (msgText.toLowerCase() === '!antidelete off') {
-                config.antiDeleteEnabled = false;
-                saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Delete feature is now DISABLED (OFF)!' }, { quoted: wasi_msg });
-                return;
-            }
-
-            if (msgText.toLowerCase() === '!antiview on') {
-                config.antiViewEnabled = true;
-                saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-View Once feature is now ENABLED (ON)!' }, { quoted: wasi_msg });
-                return;
-            }
-            if (msgText.toLowerCase() === '!antiview off') {
-                config.antiViewEnabled = false;
-                saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-View Once feature is now DISABLED (OFF)!' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link & Anti-Text Protection has been disabled (OFF)!' }, { quoted: wasi_msg });
                 return;
             }
 
             // =========================================================================
-            // 🛡️ ANTI-TEXT & ANTI-LINK PROTECTION
+            // 🛡️ ANTI-TEXT & ANTI-LINK PROTECTION (BYPASS FOR ADMINS - NO DELETE / NO KICK)
             // =========================================================================
             if (config.antiLinkEnabled && isGroup && !wasi_msg.key.fromMe) {
                 const hasLink = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+\b/i.test(msgText) || msgText.includes('wa.me/');
@@ -344,24 +319,33 @@ async function startSession(sessionId) {
 
                 if (hasLink || isPlainOrLinkText) {
                     try {
+                        // Check if sender is group admin or superadmin
                         const groupMetadata = await wasi_sock.groupMetadata(rawFrom);
                         const participants = groupMetadata.participants || [];
                         const senderParticipant = participants.find(p => p.id === senderJid);
                         const isAdmin = senderParticipant && (senderParticipant.admin === 'admin' || senderParticipant.admin === 'superadmin');
 
-                        if (isAdmin) return; 
+                        if (isAdmin) {
+                            // Agar sender admin hai toh kuch nahi karega (message delete bhi nahi hoga, kick bhi nahi)
+                            console.log(`[!] Admin ${senderJid} sent link/text in group ${rawFrom}. Bypassed completely.`);
+                            return; 
+                        }
 
+                        // 1. Delete the unwanted text/link message from normal member
                         await wasi_sock.sendMessage(rawFrom, { delete: wasi_msg.key });
+
+                        // 2. Kick the sender from the group
                         await wasi_sock.groupParticipantsUpdate(rawFrom, [senderJid], 'remove');
-                        return;
+                        console.log(`[!] Removed normal member ${senderJid} for sending text/link in group ${rawFrom}`);
+                        return; // Stop further processing for this message
                     } catch (err) {
-                        console.error('❌ Anti-text/link kick error:', err.message);
+                        console.error('❌ Anti-text/link kick error (Make sure bot is admin):', err.message);
                     }
                 }
             }
                  
             // =========================================================================
-            // ⚡ FORWARD TYPE FILTERING LOGIC
+            // ⚡ FORWARD TYPE FILTERING LOGIC (VIDEO, IMAGE, DOCUMENT ALLOWED)
             // =========================================================================
             const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
             if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
@@ -412,71 +396,20 @@ async function startSession(sessionId) {
                                 await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
                             }
 
+                            console.log(`[+] Allowed Media forwarded to ${targetJid}`);
                             break;
                         } catch (err) {
+                            console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
                             if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
                         }
                     }
+                    
                     await new Promise(res => setTimeout(res, 1500));
                 }
             }
 
         } catch (e) {
             console.error('❌ General Error:', e.message);
-        }
-    });
-
-    // -----------------------------------------------------------------------------
-    // 2. 🗑️ ROBUST ANTI-DELETE EVENT LISTENER (FIXED FOR ALL CHATS)
-    // -----------------------------------------------------------------------------
-    wasi_sock.ev.on('messages.update', async (updates) => {
-        try {
-            if (config.antiDeleteEnabled === false) return;
-
-            for (const update of updates) {
-                const isRevoked = update.update && (
-                    update.update.message === null || 
-                    update.update.status === 4 || 
-                    update.update.messageStubType === 78 ||
-                    update.update.type === 'revoke' ||
-                    Object.keys(update.update).length === 0
-                );
-
-                const msgId = update.key.id;
-                const storedData = messageStore.get(msgId);
-
-                if (storedData && (isRevoked || update.update?.message === null)) {
-                    const deletedMsg = storedData.msg;
-                    const senderJid = storedData.senderJid;
-                    const chatJid = storedData.rawFrom;
-                    const botOwnerJid = wasi_sock.user.id;
-
-                    if (deletedMsg.key.fromMe) continue;
-
-                    console.log(`[!] Deleted message successfully caught from ${senderJid} in chat ${chatJid}`);
-
-                    let textContent = deletedMsg.message.conversation || 
-                                      deletedMsg.message.extendedTextMessage?.text || 
-                                      deletedMsg.message.imageMessage?.caption || 
-                                      deletedMsg.message.videoMessage?.caption || 
-                                      '*(Media / Audio / Voice Note)*';
-
-                    let alertMessage = `🚨 *Anti-Delete Alert!*\n\n` +
-                                       `👤 *Sender:* @${senderJid.split('@')[0]}\n` +
-                                       `📍 *Chat ID:* \`${chatJid}\`\n` +
-                                       `💬 *Content:* ${textContent}`;
-
-                    await wasi_sock.sendMessage(botOwnerJid, { text: alertMessage, mentions: [senderJid] });
-                    
-                    try {
-                        await wasi_sock.sendMessage(botOwnerJid, { forward: deletedMsg });
-                    } catch (fwdErr) {
-                        console.error('Failed to forward deleted media:', fwdErr.message);
-                    }
-                }
-            }
-        } catch (err) {
-            console.error('❌ Anti-Delete Error:', err.message);
         }
     });
 }
@@ -573,7 +506,7 @@ wasi_app.get('/api/health', async (req, res) => {
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Anti-Delete & Anti-View Once Commands Integrated!`);
+        console.log(`🛡️ Anti-Link & Anti-Text Protection Configured (Admins Completely Bypassed)`);
     });
 }
 
@@ -588,6 +521,7 @@ async function main() {
     const sessionId = config.sessionId || 'wasi_session';
     await startSession(sessionId);
 
+    wasi_startServer();
 }
 
 main().catch(err => console.error('Main startup error:', err));
