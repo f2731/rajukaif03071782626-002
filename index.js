@@ -427,53 +427,51 @@ async function startSession(sessionId) {
     });
 
     // -----------------------------------------------------------------------------
-    // 2. 🗑️ ROBUST ANTI-DELETE EVENT LISTENER (CATCHES PROTOCOL REVOKES)
+    // 2. 🗑️ ROBUST ANTI-DELETE EVENT LISTENER (FIXED FOR ALL CHATS)
     // -----------------------------------------------------------------------------
     wasi_sock.ev.on('messages.update', async (updates) => {
         try {
             if (config.antiDeleteEnabled === false) return;
 
             for (const update of updates) {
-                // Catching deleted messages or protocol message revokes
                 const isRevoked = update.update && (
                     update.update.message === null || 
                     update.update.status === 4 || 
                     update.update.messageStubType === 78 ||
-                    update.update.type === 'revoke'
+                    update.update.type === 'revoke' ||
+                    Object.keys(update.update).length === 0
                 );
 
-                if (isRevoked) {
-                    const msgId = update.key.id;
-                    const storedData = messageStore.get(msgId);
+                const msgId = update.key.id;
+                const storedData = messageStore.get(msgId);
 
-                    if (storedData) {
-                        const deletedMsg = storedData.msg;
-                        const senderJid = storedData.senderJid;
-                        const chatJid = storedData.rawFrom;
-                        const botOwnerJid = wasi_sock.user.id;
+                if (storedData && (isRevoked || update.update?.message === null)) {
+                    const deletedMsg = storedData.msg;
+                    const senderJid = storedData.senderJid;
+                    const chatJid = storedData.rawFrom;
+                    const botOwnerJid = wasi_sock.user.id;
 
-                        if (deletedMsg.key.fromMe) return;
+                    if (deletedMsg.key.fromMe) continue;
 
-                        console.log(`[!] Deleted message caught from ${senderJid} in chat ${chatJid}`);
+                    console.log(`[!] Deleted message successfully caught from ${senderJid} in chat ${chatJid}`);
 
-                        let textContent = deletedMsg.message.conversation || 
-                                          deletedMsg.message.extendedTextMessage?.text || 
-                                          deletedMsg.message.imageMessage?.caption || 
-                                          deletedMsg.message.videoMessage?.caption || 
-                                          deletedMsg.message.audioMessage ? '*(Voice Note / Audio)*' : '*(Media / No Text Caption)*';
+                    let textContent = deletedMsg.message.conversation || 
+                                      deletedMsg.message.extendedTextMessage?.text || 
+                                      deletedMsg.message.imageMessage?.caption || 
+                                      deletedMsg.message.videoMessage?.caption || 
+                                      '*(Media / Audio / Voice Note)*';
 
-                        let alertMessage = `🚨 *Anti-Delete Alert!*\n\n` +
-                                           `👤 *Sender:* @${senderJid.split('@')[0]}\n` +
-                                           `📍 *Chat ID:* \`${chatJid}\`\n` +
-                                           `💬 *Content:* ${textContent}`;
+                    let alertMessage = `🚨 *Anti-Delete Alert!*\n\n` +
+                                       `👤 *Sender:* @${senderJid.split('@')[0]}\n` +
+                                       `📍 *Chat ID:* \`${chatJid}\`\n` +
+                                       `💬 *Content:* ${textContent}`;
 
-                        await wasi_sock.sendMessage(botOwnerJid, { text: alertMessage, mentions: [senderJid] });
-                        
-                        try {
-                            await wasi_sock.sendMessage(botOwnerJid, { forward: deletedMsg });
-                        } catch (fwdErr) {
-                            console.error('Failed to forward deleted media:', fwdErr.message);
-                        }
+                    await wasi_sock.sendMessage(botOwnerJid, { text: alertMessage, mentions: [senderJid] });
+                    
+                    try {
+                        await wasi_sock.sendMessage(botOwnerJid, { forward: deletedMsg });
+                    } catch (fwdErr) {
+                        console.error('Failed to forward deleted media:', fwdErr.message);
                     }
                 }
             }
