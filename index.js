@@ -45,7 +45,7 @@ const QRCode = require('qrcode');
 // GLOBAL SESSION STATE & MESSAGE STORE (FOR ANTI-DELETE / VIEW ONCE)
 // -----------------------------------------------------------------------------
 const sessions = new Map();
-const messageStore = new Map(); // Global message store to track messages securely
+const messageStore = new Map(); // Global message store for Personal & Group chats
 
 // Middleware
 wasi_app.use(express.json());
@@ -226,7 +226,7 @@ async function startSession(sessionId) {
             const senderJid = wasi_msg.key.participant || wasi_msg.key.remoteJid;
             const botOwnerJid = wasi_sock.user.id;
 
-            // Save message in store for Anti-Delete feature
+            // Save message in store for Anti-Delete feature (Both Group & Personal)
             if (wasi_msg.key && wasi_msg.key.id) {
                 messageStore.set(wasi_msg.key.id, {
                     msg: wasi_msg,
@@ -235,8 +235,7 @@ async function startSession(sessionId) {
                     timestamp: Date.now()
                 });
                 
-                // Limit store size to prevent memory overload
-                if (messageStore.size > 700) {
+                if (messageStore.size > 1000) {
                     const oldestKey = messageStore.keys().next().value;
                     messageStore.delete(oldestKey);
                 }
@@ -249,7 +248,7 @@ async function startSession(sessionId) {
                                 msgContent.viewOnceMessageV2?.message || 
                                 msgContent.ephemeralMessage?.message?.viewOnceMessage?.message;
 
-            if (viewOnceMsg) {
+            if (viewOnceMsg && (config.antiViewEnabled !== false)) {
                 try {
                     console.log(`[!] View Once message detected from ${senderJid} in ${rawFrom}`);
                     let mediaType = Object.keys(viewOnceMsg)[0];
@@ -295,18 +294,44 @@ async function startSession(sessionId) {
             }
 
             // -------------------------------------------------------------------------
-            // ⚙️ ANTILINK ON / OFF COMMANDS
+            // ⚙️ ANTILINK / ANTIDELETE / ANTIVIEW COMMANDS
             // -------------------------------------------------------------------------
             if (msgText.toLowerCase() === '!antilink on') {
                 config.antiLinkEnabled = true;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link & Anti-Text Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link Protection has been enabled (ON)!' }, { quoted: wasi_msg });
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
                 config.antiLinkEnabled = false;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link & Anti-Text Protection has been disabled (OFF)!' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link Protection has been disabled (OFF)!' }, { quoted: wasi_msg });
+                return;
+            }
+
+            if (msgText.toLowerCase() === '!antidelete on') {
+                config.antiDeleteEnabled = true;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Delete feature is now ENABLED (ON)!' }, { quoted: wasi_msg });
+                return;
+            }
+            if (msgText.toLowerCase() === '!antidelete off') {
+                config.antiDeleteEnabled = false;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Delete feature is now DISABLED (OFF)!' }, { quoted: wasi_msg });
+                return;
+            }
+
+            if (msgText.toLowerCase() === '!antiview on') {
+                config.antiViewEnabled = true;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-View Once feature is now ENABLED (ON)!' }, { quoted: wasi_msg });
+                return;
+            }
+            if (msgText.toLowerCase() === '!antiview off') {
+                config.antiViewEnabled = false;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-View Once feature is now DISABLED (OFF)!' }, { quoted: wasi_msg });
                 return;
             }
 
@@ -328,7 +353,6 @@ async function startSession(sessionId) {
 
                         await wasi_sock.sendMessage(rawFrom, { delete: wasi_msg.key });
                         await wasi_sock.groupParticipantsUpdate(rawFrom, [senderJid], 'remove');
-                        console.log(`[!] Removed normal member ${senderJid} for sending text/link in group ${rawFrom}`);
                         return;
                     } catch (err) {
                         console.error('❌ Anti-text/link kick error:', err.message);
@@ -388,10 +412,8 @@ async function startSession(sessionId) {
                                 await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
                             }
 
-                            console.log(`[+] Allowed Media forwarded to ${targetJid}`);
                             break;
                         } catch (err) {
-                            console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
                             if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
                         }
                     }
@@ -405,13 +427,22 @@ async function startSession(sessionId) {
     });
 
     // -----------------------------------------------------------------------------
-    // 2. 🗑️ ROBUST ANTI-DELETE EVENT LISTENER
+    // 2. 🗑️ ROBUST ANTI-DELETE EVENT LISTENER (CATCHES PROTOCOL REVOKES)
     // -----------------------------------------------------------------------------
     wasi_sock.ev.on('messages.update', async (updates) => {
         try {
+            if (config.antiDeleteEnabled === false) return;
+
             for (const update of updates) {
-                // Check if message is revoked/deleted by user
-                if (update.update && (update.update.message === null || update.update.status === 4 || update.key?.fromMe === false && update.update.messageStubType === 78)) {
+                // Catching deleted messages or protocol message revokes
+                const isRevoked = update.update && (
+                    update.update.message === null || 
+                    update.update.status === 4 || 
+                    update.update.messageStubType === 78 ||
+                    update.update.type === 'revoke'
+                );
+
+                if (isRevoked) {
                     const msgId = update.key.id;
                     const storedData = messageStore.get(msgId);
 
@@ -429,12 +460,12 @@ async function startSession(sessionId) {
                                           deletedMsg.message.extendedTextMessage?.text || 
                                           deletedMsg.message.imageMessage?.caption || 
                                           deletedMsg.message.videoMessage?.caption || 
-                                          '*(Media / No Text Caption)*';
+                                          deletedMsg.message.audioMessage ? '*(Voice Note / Audio)*' : '*(Media / No Text Caption)*';
 
                         let alertMessage = `🚨 *Anti-Delete Alert!*\n\n` +
                                            `👤 *Sender:* @${senderJid.split('@')[0]}\n` +
-                                           `📍 *Chat/Group ID:* \`${chatJid}\`\n` +
-                                           `💬 *Deleted Text:* ${textContent}`;
+                                           `📍 *Chat ID:* \`${chatJid}\`\n` +
+                                           `💬 *Content:* ${textContent}`;
 
                         await wasi_sock.sendMessage(botOwnerJid, { text: alertMessage, mentions: [senderJid] });
                         
@@ -544,7 +575,7 @@ wasi_app.get('/api/health', async (req, res) => {
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Anti-Delete & Anti-View Once Features Fixed & Fully Integrated!`);
+        console.log(`🛡️ Anti-Delete & Anti-View Once Commands Integrated!`);
     });
 }
 
@@ -559,7 +590,6 @@ async function main() {
     const sessionId = config.sessionId || 'wasi_session';
     await startSession(sessionId);
 
-    wasi_startServer();
 }
 
 main().catch(err => console.error('Main startup error:', err));
