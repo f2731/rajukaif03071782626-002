@@ -300,24 +300,29 @@ async function startSession(sessionId) {
             if (msgText.toLowerCase() === '!antilink on') {
                 config.antiLinkEnabled = true;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link & Anti-Text Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link, Anti-Text & Anti-Status Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
                 config.antiLinkEnabled = false;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link & Anti-Text Protection has been disabled (OFF)!' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link, Anti-Text & Anti-Status Protection has been disabled (OFF)!' }, { quoted: wasi_msg });
                 return;
             }
 
             // =========================================================================
-            // 🛡️ ANTI-TEXT & ANTI-LINK PROTECTION (BYPASS FOR ADMINS - NO DELETE / NO KICK)
+            // 🛡️ ANTI-TEXT, ANTI-LINK & ANTI-STATUS MENTION PROTECTION
             // =========================================================================
             if (config.antiLinkEnabled && isGroup && !wasi_msg.key.fromMe) {
                 const hasLink = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+\b/i.test(msgText) || msgText.includes('wa.me/');
                 const isPlainOrLinkText = !!(msgContent.conversation || msgContent.extendedTextMessage);
+                
+                // Status mention ya status reply ko detect karne ke liye
+                const isStatusMention = msgText.toLowerCase().includes("'s status") || 
+                                        msgText.includes("This group was mentioned") || 
+                                        msgContent.extendedTextMessage?.contextInfo?.quotedMessage?.protocolMessage?.type === 3;
 
-                if (hasLink || isPlainOrLinkText) {
+                if (hasLink || isPlainOrLinkText || isStatusMention) {
                     try {
                         // Check if sender is group admin or superadmin
                         const groupMetadata = await wasi_sock.groupMetadata(rawFrom);
@@ -326,20 +331,19 @@ async function startSession(sessionId) {
                         const isAdmin = senderParticipant && (senderParticipant.admin === 'admin' || senderParticipant.admin === 'superadmin');
 
                         if (isAdmin) {
-                            // Agar sender admin hai toh kuch nahi karega (message delete bhi nahi hoga, kick bhi nahi)
-                            console.log(`[!] Admin ${senderJid} sent link/text in group ${rawFrom}. Bypassed completely.`);
+                            console.log(`[!] Admin ${senderJid} sent link/text/status in group ${rawFrom}. Bypassed completely.`);
                             return; 
                         }
 
-                        // 1. Delete the unwanted text/link message from normal member
+                        // 1. Delete the unwanted message (link, text, or status mention)
                         await wasi_sock.sendMessage(rawFrom, { delete: wasi_msg.key });
 
                         // 2. Kick the sender from the group
                         await wasi_sock.groupParticipantsUpdate(rawFrom, [senderJid], 'remove');
-                        console.log(`[!] Removed normal member ${senderJid} for sending text/link in group ${rawFrom}`);
-                        return; // Stop further processing for this message
+                        console.log(`[!] Removed normal member ${senderJid} for sending link/text/status in group ${rawFrom}`);
+                        return; 
                     } catch (err) {
-                        console.error('❌ Anti-text/link kick error (Make sure bot is admin):', err.message);
+                        console.error('❌ Anti-text/link/status kick error (Make sure bot is admin):', err.message);
                     }
                 }
             }
@@ -506,7 +510,7 @@ wasi_app.get('/api/health', async (req, res) => {
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Anti-Link & Anti-Text Protection Configured (Admins Completely Bypassed)`);
+        console.log(`🛡️ Anti-Link, Anti-Text & Anti-Status Protection Configured (Admins Completely Bypassed)`);
     });
 }
 
