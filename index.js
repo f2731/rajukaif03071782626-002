@@ -27,14 +27,6 @@ try {
     console.error('Failed to load botConfig.json:', e);
 }
 
-// Ensure sourceJids and targetJids arrays exist in config
-if (!config.sourceJids) {
-    config.sourceJids = process.env.SOURCE_JIDS ? process.env.SOURCE_JIDS.split(',').map(s => s.trim()).filter(Boolean) : [];
-}
-if (!config.targetJids) {
-    config.targetJids = process.env.TARGET_JIDS ? process.env.TARGET_JIDS.split(',').map(s => s.trim()).filter(Boolean) : [];
-}
-
 // Helper to save config state
 function saveBotConfig() {
     try {
@@ -70,8 +62,16 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 // -----------------------------------------------------------------------------
-// AUTO FORWARD CONFIGURATION (Multi-Source & Multi-Target)
+// AUTO FORWARD CONFIGURATION
 // -----------------------------------------------------------------------------
+const SOURCE_JIDS = process.env.SOURCE_JIDS
+    ? process.env.SOURCE_JIDS.split(',')
+    : [];
+
+const TARGET_JIDS = process.env.TARGET_JIDS
+    ? process.env.TARGET_JIDS.split(',')
+    : [];
+
 const OLD_TEXT_REGEX = process.env.OLD_TEXT_REGEX
     ? process.env.OLD_TEXT_REGEX.split(',').map(pattern => {
         try {
@@ -295,64 +295,6 @@ async function startSession(sessionId) {
             }
 
             // -------------------------------------------------------------------------
-            // 📌 MULTI-SOURCE & MULTI-TARGET MANAGEMENT COMMANDS
-            // -------------------------------------------------------------------------
-            const args = msgText.split(' ');
-            const command = args[0].toLowerCase();
-
-            if (command === '!addsource') {
-                const targetJidInput = args[1] || rawFrom;
-                if (!config.sourceJids.includes(targetJidInput)) {
-                    config.sourceJids.push(targetJidInput);
-                    saveBotConfig();
-                    await wasi_sock.sendMessage(rawFrom, { text: `✅ Successfully added Source JID:\n\`${targetJidInput}\`` }, { quoted: wasi_msg });
-                } else {
-                    await wasi_sock.sendMessage(rawFrom, { text: `⚠️ Yeh JID pehle se Source list mein mojood hai.` }, { quoted: wasi_msg });
-                }
-                return;
-            }
-
-            if (command === '!delsource') {
-                const targetJidInput = args[1] || rawFrom;
-                config.sourceJids = config.sourceJids.filter(id => id !== targetJidInput);
-                saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: `🗑️ Removed Source JID:\n\`${targetJidInput}\`` }, { quoted: wasi_msg });
-                return;
-            }
-
-            if (command === '!addtarget') {
-                const targetJidInput = args[1] || rawFrom;
-                if (!config.targetJids.includes(targetJidInput)) {
-                    config.targetJids.push(targetJidInput);
-                    saveBotConfig();
-                    await wasi_sock.sendMessage(rawFrom, { text: `✅ Successfully added Target JID:\n\`${targetJidInput}\`` }, { quoted: wasi_msg });
-                } else {
-                    await wasi_sock.sendMessage(rawFrom, { text: `⚠️ Yeh JID pehle se Target list mein mojood hai.` }, { quoted: wasi_msg });
-                }
-                return;
-            }
-
-            if (command === '!deltarget') {
-                const targetJidInput = args[1] || rawFrom;
-                config.targetJids = config.targetJids.filter(id => id !== targetJidInput);
-                saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: `🗑️ Removed Target JID:\n\`${targetJidInput}\`` }, { quoted: wasi_msg });
-                return;
-            }
-
-            if (command === '!listst' || command === '!sources') {
-                let report = `📋 *Autoforward Configuration:*\n\n`;
-                report += `🟢 *Source JIDs (${config.sourceJids.length}):*\n`;
-                config.sourceJids.forEach((id, index) => { report += `${index + 1}. \`${id}\`\n`; });
-                
-                report += `\n🎯 *Target JIDs (${config.targetJids.length}):*\n`;
-                config.targetJids.forEach((id, index) => { report += `${index + 1}. \`${id}\`\n`; });
-
-                await wasi_sock.sendMessage(rawFrom, { text: report }, { quoted: wasi_msg });
-                return;
-            }
-
-            // -------------------------------------------------------------------------
             // ⚙️ ANTILINK ON / OFF COMMANDS
             // -------------------------------------------------------------------------
             if (msgText.toLowerCase() === '!antilink on') {
@@ -375,37 +317,44 @@ async function startSession(sessionId) {
                 const hasLink = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+\b/i.test(msgText) || msgText.includes('wa.me/');
                 const isPlainOrLinkText = !!(msgContent.conversation || msgContent.extendedTextMessage);
                 
+                // Status mention ya status reply ko detect karne ke liye
                 const isStatusMention = msgText.toLowerCase().includes("'s status") || 
                                         msgText.includes("This group was mentioned") || 
                                         msgContent.extendedTextMessage?.contextInfo?.quotedMessage?.protocolMessage?.type === 3;
 
                 if (hasLink || isPlainOrLinkText || isStatusMention) {
                     try {
+                        // Check if sender is group admin or superadmin
                         const groupMetadata = await wasi_sock.groupMetadata(rawFrom);
                         const participants = groupMetadata.participants || [];
                         const senderParticipant = participants.find(p => p.id === senderJid);
                         const isAdmin = senderParticipant && (senderParticipant.admin === 'admin' || senderParticipant.admin === 'superadmin');
 
                         if (isAdmin) {
+                            console.log(`[!] Admin ${senderJid} sent link/text/status in group ${rawFrom}. Bypassed completely.`);
                             return; 
                         }
 
+                        // 1. Delete the unwanted message (link, text, or status mention)
                         await wasi_sock.sendMessage(rawFrom, { delete: wasi_msg.key });
+
+                        // 2. Kick the sender from the group
                         await wasi_sock.groupParticipantsUpdate(rawFrom, [senderJid], 'remove');
+                        console.log(`[!] Removed normal member ${senderJid} for sending link/text/status in group ${rawFrom}`);
                         return; 
                     } catch (err) {
-                        console.error('❌ Anti-text/link/status kick error:', err.message);
+                        console.error('❌ Anti-text/link/status kick error (Make sure bot is admin):', err.message);
                     }
                 }
             }
                  
             // =========================================================================
-            // ⚡ MULTI-SOURCE & MULTI-TARGET FORWARDING LOGIC
+            // ⚡ FORWARD TYPE FILTERING LOGIC (VIDEO, IMAGE, DOCUMENT ALLOWED)
             // =========================================================================
-            const sourceList = config.sourceJids.map(id => cleanJid(id));
-            if (sourceList.length > 0 && !sourceList.some(src => cleanFrom.includes(src))) return;
+            const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
+            if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
 
-            const targetList = config.targetJids.map(id => id.trim()).filter(Boolean);
+            const targetList = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
             if (targetList.length === 0) return;
 
             const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document')
@@ -561,7 +510,7 @@ wasi_app.get('/api/health', async (req, res) => {
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Multi-Source & Multi-Target Auto-Forwarding Configured successfully!`);
+        console.log(`🛡️ Anti-Link, Anti-Text & Anti-Status Protection Configured (Admins Completely Bypassed)`);
     });
 }
 
