@@ -180,7 +180,7 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 
         const isImg = targetMsg.message?.imageMessage || targetMsg.message?.ephemeralMessage?.message?.imageMessage;
         if (!isImg) {
-            await sock.sendMessage(from, { text: "❌ Bara-e-karam koi tasveer bhejiye ya kisi tasveer ko reply karke !fullpp likhiye." });
+            await sock.sendMessage(from, { text: "❌ Bara-e-karam koi tasveer bhejiye ya kisi tasveer کو reply karke !fullpp likhiye." });
             return;
         }
 
@@ -191,7 +191,7 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 
         const botId = sock.user.id;
         await sock.updateProfilePicture(botId, stream);
-        await sock.sendMessage(from, { text: "✅ Bot ki profile picture kamyabi se update ho gayi hai!" });
+        await sock.sendMessage(from, { text: "✅ Bot کی profile picture kamyabi se update ho gayi hai!" });
     } catch (error) {
         console.error('FullPP Error:', error);
         await sock.sendMessage(from, { text: `❌ Profile picture update karne mein masla aaya: ${error.message}` });
@@ -317,17 +317,14 @@ async function startSession(sessionId) {
                 const hasLink = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+\b/i.test(msgText) || msgText.includes('wa.me/');
                 const isPlainOrLinkText = !!(msgContent.conversation || msgContent.extendedTextMessage);
                 
-                // Sirf wohi audio block hogi jo asli Voice Note (PTT) ho, baqi aam audio/songs mehfooz rahenge
                 const isVoiceMessage = !!(msgContent.audioMessage && msgContent.audioMessage.ptt);
 
-                // Status mention ya status reply ko detect karne ke liye
                 const isStatusMention = msgText.toLowerCase().includes("'s status") || 
                                         msgText.includes("This group was mentioned") || 
                                         msgContent.extendedTextMessage?.contextInfo?.quotedMessage?.protocolMessage?.type === 3;
 
                 if (hasLink || isPlainOrLinkText || isVoiceMessage || isStatusMention) {
                     try {
-                        // Check if sender is group admin or superadmin
                         const groupMetadata = await wasi_sock.groupMetadata(rawFrom);
                         const participants = groupMetadata.participants || [];
                         const senderParticipant = participants.find(p => p.id === senderJid);
@@ -338,10 +335,7 @@ async function startSession(sessionId) {
                             return; 
                         }
 
-                        // 1. Delete the unwanted message
                         await wasi_sock.sendMessage(rawFrom, { delete: wasi_msg.key });
-
-                        // 2. Kick the sender from the group
                         await wasi_sock.groupParticipantsUpdate(rawFrom, [senderJid], 'remove');
                         console.log(`[!] Removed normal member ${senderJid} for sending restricted content/voice note in group ${rawFrom}`);
                         return; 
@@ -352,7 +346,7 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ FORWARD TYPE FILTERING LOGIC (VIDEO, IMAGE, DOCUMENT ALLOWED)
+            // ⚡ FORWARD TYPE FILTERING & CAPTION REGEX REPLACEMENT LOGIC
             // =========================================================================
             const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
             if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
@@ -382,6 +376,7 @@ async function startSession(sessionId) {
                         try {
                             let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
 
+                            // Context info cleaning
                             const cleanContext = (obj) => {
                                 if (!obj || typeof obj !== 'object') return;
                                 if (obj.contextInfo) {
@@ -397,13 +392,24 @@ async function startSession(sessionId) {
                             };
                             cleanContext(cleanMessage);
 
+                            // 🔄 Caption Replacement (Regex) logic applied here
+                            if (cleanMessage.imageMessage?.caption) {
+                                cleanMessage.imageMessage.caption = replaceCaption(cleanMessage.imageMessage.caption);
+                            }
+                            if (cleanMessage.videoMessage?.caption) {
+                                cleanMessage.videoMessage.caption = replaceCaption(cleanMessage.videoMessage.caption);
+                            }
+                            if (cleanMessage.documentMessage?.caption) {
+                                cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
+                            }
+
                             try {
                                 await wasi_sock.sendMessage(targetJid, cleanMessage);
                             } catch (mediaErr) {
                                 await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
                             }
 
-                            console.log(`[+] Allowed Media forwarded to ${targetJid}`);
+                            console.log(`[+] Allowed Media & Replaced Caption forwarded to ${targetJid}`);
                             break;
                         } catch (err) {
                             console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
