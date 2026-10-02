@@ -62,16 +62,8 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 // -----------------------------------------------------------------------------
-// AUTO FORWARD CONFIGURATION
+// AUTO FORWARD & SIMPLE MAPPING CONFIGURATION
 // -----------------------------------------------------------------------------
-const SOURCE_JIDS = process.env.SOURCE_JIDS
-    ? process.env.SOURCE_JIDS.split(',')
-    : [];
-
-const TARGET_JIDS = process.env.TARGET_JIDS
-    ? process.env.TARGET_JIDS.split(',')
-    : [];
-
 const OLD_TEXT_REGEX = process.env.OLD_TEXT_REGEX
     ? process.env.OLD_TEXT_REGEX.split(',').map(pattern => {
         try {
@@ -86,6 +78,27 @@ const OLD_TEXT_REGEX = process.env.OLD_TEXT_REGEX
 const NEW_TEXT = process.env.NEW_TEXT
     ? process.env.NEW_TEXT
     : '';
+
+/* 
+  📌 Simple Direct Mapping Setup:
+  Ab aap Heroku ya .env mein FORWARD_MAP ko is tarhan likhein ge:
+  SOURCE_JID:TARGET_JID
+  Misal ke tor par:
+  120363420352438696@g.us:120363404925595332@g.us,120363413621160654@g.us:120363404925595332@g.us
+*/
+let FORWARD_MAP = {};
+try {
+    if (process.env.FORWARD_MAP) {
+        process.env.FORWARD_MAP.split(',').forEach(pair => {
+            const [src, target] = pair.split(':');
+            if (src && target) {
+                FORWARD_MAP[src.trim()] = target.trim();
+            }
+        });
+    }
+} catch (e) {
+    console.error('Failed to parse FORWARD_MAP:', e);
+}
 
 // -----------------------------------------------------------------------------
 // HELPER FUNCTIONS FOR MESSAGE CLEANING
@@ -346,13 +359,21 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ FORWARD TYPE FILTERING & CAPTION REGEX REPLACEMENT LOGIC
+            // ⚡ SIMPLE SOURCE:TARGET FORWARD MAPPING LOGIC
             // =========================================================================
-            const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
-            if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
+            let targetJid = null;
+            
+            const matchedSourceKey = Object.keys(FORWARD_MAP).find(src => cleanFrom.includes(cleanJid(src)));
+            if (matchedSourceKey) {
+                targetJid = FORWARD_MAP[matchedSourceKey];
+            } else {
+                const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
+                if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
+                const targets = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
+                targetJid = targets[0]; // Fallback to first target
+            }
 
-            const targetList = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
-            if (targetList.length === 0) return;
+            if (!targetJid) return;
 
             const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document')
                 .toLowerCase()
@@ -371,53 +392,47 @@ async function startSession(sessionId) {
             if (isAlbum) shouldForward = true;
 
             if (shouldForward) {
-                for (const targetJid of targetList) {
-                    for (let attempt = 1; attempt <= 3; attempt++) {
-                        try {
-                            let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
 
-                            // Context info cleaning
-                            const cleanContext = (obj) => {
-                                if (!obj || typeof obj !== 'object') return;
-                                if (obj.contextInfo) {
-                                    delete obj.contextInfo.forwardingScore;
-                                    delete obj.contextInfo.isForwarded;
-                                    obj.contextInfo.participant = "Raju Boss +923071782626";
+                        const cleanContext = (obj) => {
+                            if (!obj || typeof obj !== 'object') return;
+                            if (obj.contextInfo) {
+                                delete obj.contextInfo.forwardingScore;
+                                delete obj.contextInfo.isForwarded;
+                                obj.contextInfo.participant = "Raju Boss +923071782626";
+                            }
+                            for (let key of Object.keys(obj)) {
+                                if (typeof obj[key] === 'object') {
+                                    cleanContext(obj[key]);
                                 }
-                                for (let key of Object.keys(obj)) {
-                                    if (typeof obj[key] === 'object') {
-                                        cleanContext(obj[key]);
-                                    }
-                                }
-                            };
-                            cleanContext(cleanMessage);
+                            }
+                        };
+                        cleanContext(cleanMessage);
 
-                            // 🔄 Caption Replacement (Regex) logic applied here
-                            if (cleanMessage.imageMessage?.caption) {
-                                cleanMessage.imageMessage.caption = replaceCaption(cleanMessage.imageMessage.caption);
-                            }
-                            if (cleanMessage.videoMessage?.caption) {
-                                cleanMessage.videoMessage.caption = replaceCaption(cleanMessage.videoMessage.caption);
-                            }
-                            if (cleanMessage.documentMessage?.caption) {
-                                cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
-                            }
-
-                            try {
-                                await wasi_sock.sendMessage(targetJid, cleanMessage);
-                            } catch (mediaErr) {
-                                await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
-                            }
-
-                            console.log(`[+] Allowed Media & Replaced Caption forwarded to ${targetJid}`);
-                            break;
-                        } catch (err) {
-                            console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
-                            if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
+                        if (cleanMessage.imageMessage?.caption) {
+                            cleanMessage.imageMessage.caption = replaceCaption(cleanMessage.imageMessage.caption);
                         }
+                        if (cleanMessage.videoMessage?.caption) {
+                            cleanMessage.videoMessage.caption = replaceCaption(cleanMessage.videoMessage.caption);
+                        }
+                        if (cleanMessage.documentMessage?.caption) {
+                            cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
+                        }
+
+                        try {
+                            await wasi_sock.sendMessage(targetJid, cleanMessage);
+                        } catch (mediaErr) {
+                            await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
+                        }
+
+                        console.log(`[+] Media forwarded from ${cleanFrom} to ${targetJid}`);
+                        break;
+                    } catch (err) {
+                        console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
+                        if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
                     }
-                    
-                    await new Promise(res => setTimeout(res, 1500));
                 }
             }
 
@@ -515,11 +530,11 @@ wasi_app.get('/api/health', async (req, res) => {
 
 // -----------------------------------------------------------------------------
 // SERVER START
-// -----------------------------------------------------------------------------
+// -----------------------------
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Anti-Link, Anti-Text, Anti-Voice Note & Anti-Status Protection Configured (Admins Completely Bypassed)`);
+        console.log(`🛡️ Simple Source:Target Mapping Configured Successfully!`);
     });
 }
 
