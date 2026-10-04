@@ -458,7 +458,7 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ SIMPLE SOURCE:TARGET FORWARD MAPPING LOGIC
+            // ⚡ SIMPLE SOURCE:TARGET FORWARD MAPPING & ZERO MEMORY RELAY LOGIC
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
 
@@ -476,21 +476,13 @@ async function startSession(sessionId) {
 
             if (!targetJid) return;
 
-            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document')
-                .toLowerCase()
-                .split(',')
-                .map(t => t.trim());
-
+            // Har tarha ki media, text, albums aur 5GB tak ki files ko allow karne ke liye check:
             const isVideo = !!(msgContent.videoMessage || msgContent.ephemeralMessage?.message?.videoMessage || msgContent.viewOnceMessage?.message?.videoMessage || msgContent.viewOnceMessageV2?.message?.videoMessage);
             const isImage = !!(msgContent.imageMessage || msgContent.ephemeralMessage?.message?.imageMessage || msgContent.viewOnceMessage?.message?.imageMessage || msgContent.viewOnceMessageV2?.message?.imageMessage);
             const isDocument = !!(msgContent.documentMessage || msgContent.ephemeralMessage?.message?.documentMessage);
-            const isAlbum = !!(msgContent.groupInviteMessage || msgContent.pollCreationMessage || msgContent.buttonsMessage || msgContent.templateMessage || msgContent.listMessage || msgContent.reactionMessage || msgContent.albumMessage);
+            const isAlbum = !!(msgContent.groupInviteMessage || msgContent.pollCreationMessage || msgContent.buttonsMessage || msgContent.templateMessage || msgContent.listMessage || msgContent.reactionMessage || msgContent.albumMessage || msgContent.senderKeyDistributionMessage || msgContent.messageContextInfo);
 
-            let shouldForward = false;
-            if (isVideo && allowedTypes.includes('video')) shouldForward = true;
-            if (isImage && allowedTypes.includes('image')) shouldForward = true;
-            if (isDocument && allowedTypes.includes('document')) shouldForward = true;
-            if (isAlbum) shouldForward = true;
+            let shouldForward = (isVideo || isImage || isDocument || isAlbum || msgContent.conversation || msgContent.extendedTextMessage);
 
             if (shouldForward) {
                 for (let attempt = 1; attempt <= 3; attempt++) {
@@ -522,16 +514,13 @@ async function startSession(sessionId) {
                             cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
                         }
 
-                        try {
-                            await wasi_sock.sendMessage(targetJid, cleanMessage);
-                        } catch (mediaErr) {
-                            await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
-                        }
+                        // Direct Server-to-Server Relay (Zero Memory / RAM usage, ideal for 5GB+ files & 100+ albums)
+                        await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
 
-                        console.log(`[+] Media forwarded from ${cleanFrom} to ${targetJid}`);
+                        console.log(`[+] High-speed media/album forwarded from ${cleanFrom} to ${targetJid}`);
                         break;
                     } catch (err) {
-                        console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
+                        console.error(`[!] Attempt ${attempt} relay failed for ${targetJid}:`, err.message);
                         if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
                     }
                 }
