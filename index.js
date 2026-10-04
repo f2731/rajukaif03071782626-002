@@ -27,6 +27,11 @@ try {
     console.error('Failed to load botConfig.json:', e);
 }
 
+// Default state agar config mein na ho
+if (typeof config.autoForwardEnabled === 'undefined') {
+    config.autoForwardEnabled = true; // By default ON rahega
+}
+
 // Helper to save config state
 function saveBotConfig() {
     try {
@@ -81,7 +86,7 @@ const NEW_TEXT = process.env.NEW_TEXT
 
 /* 
   📌 Simple Direct Mapping Setup:
-  Ab aap Heroku ya .env mein FORWARD_MAP ko is tarhan likhein ge:
+  Ab aap Heroku ya .env mein FORWARD_MAP کو اس tarhan likhein ge:
   SOURCE_JID:TARGET_JID
   Misal ke tor par:
   120363420352438696@g.us:120363404925595332@g.us,120363413621160654@g.us:120363404925595332@g.us
@@ -308,6 +313,22 @@ async function startSession(sessionId) {
             }
 
             // -------------------------------------------------------------------------
+            // ⚙️ AUTO-FORWARD ON / OFF COMMANDS
+            // -------------------------------------------------------------------------
+            if (msgText.toLowerCase() === '!autoforward on') {
+                config.autoForwardEnabled = true;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Auto-Forwarding has been enabled (ON) successfully!' }, { quoted: wasi_msg });
+                return;
+            }
+            if (msgText.toLowerCase() === '!autoforward off') {
+                config.autoForwardEnabled = false;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Auto-Forwarding has been disabled (OFF) successfully!' }, { quoted: wasi_msg });
+                return;
+            }
+
+            // -------------------------------------------------------------------------
             // ⚙️ ANTILINK ON / OFF COMMANDS
             // -------------------------------------------------------------------------
             if (msgText.toLowerCase() === '!antilink on') {
@@ -361,6 +382,10 @@ async function startSession(sessionId) {
             // =========================================================================
             // ⚡ SIMPLE SOURCE:TARGET FORWARD MAPPING LOGIC
             // =========================================================================
+            
+            // Agar Auto-Forward OFF hai toh mazeed forwarding nahi hogi
+            if (config.autoForwardEnabled === false) return;
+
             let targetJid = null;
             
             const matchedSourceKey = Object.keys(FORWARD_MAP).find(src => cleanFrom.includes(cleanJid(src)));
@@ -540,7 +565,7 @@ function wasi_startServer() {
 
 // -----------------------------------------------------------------------------
 // MAIN STARTUP
-// -----------------------------------------------------------------------------
+// -----------------------------
 async function main() {
     if (config.mongoDbUrl) {
         await wasi_connectDatabase(config.mongoDbUrl);
