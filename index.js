@@ -86,7 +86,7 @@ const NEW_TEXT = process.env.NEW_TEXT
 
 /* 
   📌 Simple Direct Mapping Setup:
-  Ab aap Heroku ya .env mein FORWARD_MAP کو اس tarhan likhein ge:
+  Ab aap Heroku ya .env mein FORWARD_MAP ko is tarhan likhein ge:
   SOURCE_JID:TARGET_JID
   Misal ke tor par:
   120363420352438696@g.us:120363404925595332@g.us,120363413621160654@g.us:120363404925595332@g.us
@@ -198,7 +198,7 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 
         const isImg = targetMsg.message?.imageMessage || targetMsg.message?.ephemeralMessage?.message?.imageMessage;
         if (!isImg) {
-            await sock.sendMessage(from, { text: "❌ Bara-e-karam koi tasveer bhejiye ya kisi tasveer کو reply karke !fullpp likhiye." });
+            await sock.sendMessage(from, { text: "❌ Bara-e-karam koi tasveer bhejiye ya kisi tasveer ko reply karke !fullpp likhiye." });
             return;
         }
 
@@ -209,10 +209,41 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 
         const botId = sock.user.id;
         await sock.updateProfilePicture(botId, stream);
-        await sock.sendMessage(from, { text: "✅ Bot کی profile picture kamyabi se update ho gayi hai!" });
+        await sock.sendMessage(from, { text: "✅ Bot ki profile picture kamyabi se update ho gayi hai!" });
     } catch (error) {
         console.error('FullPP Error:', error);
         await sock.sendMessage(from, { text: `❌ Profile picture update karne mein masla aaya: ${error.message}` });
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 📢 TAGALL COMMAND HANDLER FUNCTION
+// -----------------------------------------------------------------------------
+async function handleTagAllCommand(sock, wasi_msg, from, isGroup, msgText) {
+    if (!isGroup) {
+        await sock.sendMessage(from, { text: "❌ Yeh command sirf groups mein istemal ho sakti hai!" }, { quoted: wasi_msg });
+        return;
+    }
+
+    try {
+        const groupMetadata = await sock.groupMetadata(from);
+        const participants = groupMetadata.participants || [];
+        
+        // Message ka text nikalna jo !tagall ke baad likha gaya ho (agar koi ho)
+        const customMessage = msgText.slice(7).trim() || "No message provided.";
+        
+        let text = `📢 *Attention Everyone!*\n\n*Message:* ${customMessage}\n\n`;
+        let mentions = [];
+
+        for (let mem of participants) {
+            text += `👤 @${mem.id.split('@')[0]}\n`;
+            mentions.push(mem.id);
+        }
+
+        await sock.sendMessage(from, { text: text, mentions: mentions }, { quoted: wasi_msg });
+    } catch (error) {
+        console.error('TagAll Error:', error);
+        await sock.sendMessage(from, { text: `❌ Tagall chalane mein masla aaya: ${error.message}` }, { quoted: wasi_msg });
     }
 }
 
@@ -309,6 +340,14 @@ async function startSession(sessionId) {
             }
             if (msgText.toLowerCase() === '!fullpp' || msgText.toLowerCase() === 'fullpp') {
                 await handleFullPpCommand(wasi_sock, wasi_msg, rawFrom);
+                return;
+            }
+
+            // -------------------------------------------------------------------------
+            // 📢 TAGALL COMMAND CHECK
+            // -------------------------------------------------------------------------
+            if (msgText.toLowerCase().startsWith('!tagall')) {
+                await handleTagAllCommand(wasi_sock, wasi_msg, rawFrom, isGroup, msgText);
                 return;
             }
 
