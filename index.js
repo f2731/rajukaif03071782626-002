@@ -52,10 +52,6 @@ const sessions = new Map();
 const qrTimeouts = new Map();
 const keepAliveIntervals = new Map();
 
-// Admin number for startup notifications
-const ADMIN_NUMBER = '923039107958';
-const ADMIN_JID = `${ADMIN_NUMBER}@s.whatsapp.net`;
-
 // Middleware
 wasi_app.use(express.json());
 wasi_app.use(express.static(path.join(__dirname, 'public')));
