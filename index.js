@@ -84,13 +84,6 @@ const NEW_TEXT = process.env.NEW_TEXT
     ? process.env.NEW_TEXT
     : '';
 
-/* 
-  📌 Simple Direct Mapping Setup:
-  Ab aap Heroku ya .env mein FORWARD_MAP ko is tarhan likhein ge:
-  SOURCE_JID:TARGET_JID
-  Misal ke tor par:
-  120363420352438696@g.us:120363404925595332@g.us,120363413621160654@g.us:120363404925595332@g.us
-*/
 let FORWARD_MAP = {};
 try {
     if (process.env.FORWARD_MAP) {
@@ -217,7 +210,7 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 }
 
 // -----------------------------------------------------------------------------
-// 📢 TAGALL COMMAND HANDLER FUNCTION
+// 📢 HIDETAGALL COMMAND HANDLER FUNCTION (Numbers hidden, all mentioned)
 // -----------------------------------------------------------------------------
 async function handleTagAllCommand(sock, wasi_msg, from, isGroup, msgText) {
     if (!isGroup) {
@@ -229,14 +222,13 @@ async function handleTagAllCommand(sock, wasi_msg, from, isGroup, msgText) {
         const groupMetadata = await sock.groupMetadata(from);
         const participants = groupMetadata.participants || [];
         
-        // Message ka text nikalna jo !tagall ke baad likha gaya ho (agar koi ho)
         const customMessage = msgText.slice(7).trim() || "No message provided.";
         
+        // Yahan numbers bilkul nazar nahi aayenge, sirf aik clean message aur hidden mentions jayengi[span_2](start_span)[span_2](end_span)
         let text = `📢 *Attention Everyone!*\n\n*Message:* ${customMessage}\n\n`;
         let mentions = [];
 
         for (let mem of participants) {
-            text += `👤 @${mem.id.split('@')[0]}\n`;
             mentions.push(mem.id);
         }
 
@@ -373,7 +365,7 @@ async function startSession(sessionId) {
             if (msgText.toLowerCase() === '!antilink on') {
                 config.antiLinkEnabled = true;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link, Anti-Text, Anti-Voice Note & Anti-Status Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡️️ Anti-Link, Anti-Text, Anti-Voice Note & Anti-Status Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
@@ -404,16 +396,14 @@ async function startSession(sessionId) {
                         const isAdmin = senderParticipant && (senderParticipant.admin === 'admin' || senderParticipant.admin === 'superadmin');
 
                         if (isAdmin) {
-                            console.log(`[!] Admin ${senderJid} sent restricted content in group ${rawFrom}. Bypassed completely.`);
                             return; 
                         }
 
                         await wasi_sock.sendMessage(rawFrom, { delete: wasi_msg.key });
                         await wasi_sock.groupParticipantsUpdate(rawFrom, [senderJid], 'remove');
-                        console.log(`[!] Removed normal member ${senderJid} for sending restricted content/voice note in group ${rawFrom}`);
                         return; 
                     } catch (err) {
-                        console.error('❌ Anti-protection kick error (Make sure bot is admin):', err.message);
+                        console.error('❌ Anti-protection kick error:', err.message);
                     }
                 }
             }
@@ -421,8 +411,6 @@ async function startSession(sessionId) {
             // =========================================================================
             // ⚡ SIMPLE SOURCE:TARGET FORWARD MAPPING LOGIC
             // =========================================================================
-            
-            // Agar Auto-Forward OFF hai toh mazeed forwarding nahi hogi
             if (config.autoForwardEnabled === false) return;
 
             let targetJid = null;
@@ -434,7 +422,7 @@ async function startSession(sessionId) {
                 const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
                 if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
                 const targets = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
-                targetJid = targets[0]; // Fallback to first target
+                targetJid = targets[0]; 
             }
 
             if (!targetJid) return;
