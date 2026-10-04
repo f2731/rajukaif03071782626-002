@@ -289,7 +289,7 @@ async function startSession(sessionId) {
                 sessionState.reconnectAttempts++;
                 // Exponential backoff delay calculation
                 const delay = Math.min(1000 * Math.pow(2, sessionState.reconnectAttempts), 30000);
-                console.log(`⚠️️ Connection closed. Reconnecting in ${delay / 1000} seconds (Attempt ${sessionState.reconnectAttempts})...`);
+                console.log(`⚠ Connection closed. Reconnecting in ${delay / 1000} seconds (Attempt ${sessionState.reconnectAttempts})...`);
                 setTimeout(() => { startSession(sessionId); }, delay);
             } else {
                 sessions.delete(sessionId);
@@ -306,7 +306,7 @@ async function startSession(sessionId) {
             try {
                 const adminJid = wasi_sock.user?.id ? jidNormalizedUser(wasi_sock.user.id) : null;
                 if (adminJid) {
-                    await wasi_sock.sendMessage(adminJid, { text: `🚀 Bot successfully connected and online! Session ID: ${sessionId}` });
+                    await wasi_sock.sendMessage(adminJid, { text: `🚀 Raju Bot successfully connected and online! Session ID: ${sessionId}` });
                 }
             } catch (err) {
                 console.error('Failed to send startup notification to admin:', err.message);
@@ -579,9 +579,9 @@ function wasi_startServer() {
     });
 }
 
-// -------------------------------------------------------------
+// -----------------------------
 // MAIN STARTUP
-// -------------------------------------------------------------
+// -----------------------------
 async function main() {
     if (config.mongoDbUrl) {
         await wasi_connectDatabase(config.mongoDbUrl);
