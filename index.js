@@ -3,8 +3,7 @@ const {
     DisconnectReason,
     jidNormalizedUser,
     proto,
-    downloadMediaMessage,
-    Browsers
+    downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
@@ -82,6 +81,10 @@ const NEW_TEXT = process.env.NEW_TEXT
 
 /* 
   📌 Simple Direct Mapping Setup:
+  Ab aap Heroku ya .env mein FORWARD_MAP ko is tarhan likhein ge:
+  SOURCE_JID:TARGET_JID
+  Misal ke tor par:
+  120363420352438696@g.us:120363404925595332@g.us,120363413621160654@g.us:120363404925595332@g.us
 */
 let FORWARD_MAP = {};
 try {
@@ -98,21 +101,8 @@ try {
 }
 
 // -----------------------------------------------------------------------------
-// (1) & (2) HELPER FUNCTIONS FOR MESSAGE & NEWSLETTER CLEANING
+// HELPER FUNCTIONS FOR MESSAGE CLEANING
 // -----------------------------------------------------------------------------
-function cleanForwardedLabel(msgContent) {
-    if (!msgContent || typeof msgContent !== 'object') return;
-    if (msgContent.contextInfo) {
-        delete msgContent.contextInfo.forwardingScore;
-        delete msgContent.contextInfo.isForwarded;
-    }
-    for (let key of Object.keys(msgContent)) {
-        if (typeof msgContent[key] === 'object' && msgContent[key] !== null) {
-            cleanForwardedLabel(msgContent[key]);
-        }
-    }
-}
-
 function cleanNewsletterText(text) {
     if (!text) return text;
     
@@ -133,10 +123,9 @@ function cleanNewsletterText(text) {
 
 function replaceCaption(caption) {
     if (!caption) return caption;
-    let text = cleanNewsletterText(caption);
-    if (!OLD_TEXT_REGEX.length || !NEW_TEXT) return text;
+    if (!OLD_TEXT_REGEX.length || !NEW_TEXT) return caption;
     
-    let result = text;
+    let result = caption;
     OLD_TEXT_REGEX.forEach(regex => {
         result = result.replace(regex, NEW_TEXT);
     });
@@ -204,7 +193,7 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 
         const isImg = targetMsg.message?.imageMessage || targetMsg.message?.ephemeralMessage?.message?.imageMessage;
         if (!isImg) {
-            await sock.sendMessage(from, { text: "❌ Bara-e-karam koi tasveer bhejiye ya kisi tasveer ko reply karke !fullpp likhiye." });
+            await sock.sendMessage(from, { text: "❌ Bara-e-karam koi tasveer bhejiye ya kisi tasveer کو reply karke !fullpp likhiye." });
             return;
         }
 
@@ -215,7 +204,7 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 
         const botId = sock.user.id;
         await sock.updateProfilePicture(botId, stream);
-        await sock.sendMessage(from, { text: "✅ Bot ki profile picture kamyabi se update ho gayi hai!" });
+        await sock.sendMessage(from, { text: "✅ Bot کی profile picture kamyabi se update ho gayi hai!" });
     } catch (error) {
         console.error('FullPP Error:', error);
         await sock.sendMessage(from, { text: `❌ Profile picture update karne mein masla aaya: ${error.message}` });
@@ -223,29 +212,14 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 }
 
 // -----------------------------------------------------------------------------
-// (3), (4) & (5) SESSION MANAGEMENT, KEEP-ALIVE & AUTO RECONNECTION SETUP
+// SESSION MANAGEMENT
 // -----------------------------------------------------------------------------
-function startKeepAlive(sock) {
-    if (sock.keepAliveInterval) clearInterval(sock.keepAliveInterval);
-    sock.keepAliveInterval = setInterval(async () => {
-        try {
-            if (sock && sock.ws && sock.ws.readyState === sock.ws.OPEN) {
-                await sock.sendPresenceUpdate('available');
-                console.log('🔄 Keep-Alive presence signal sent successfully.');
-            }
-        } catch (error) {
-            console.error('❌ Keep-Alive error:', error.message);
-        }
-    }, 30 * 1000); // Har 30 seconds ke baad
-}
-
 async function startSession(sessionId) {
     if (sessions.has(sessionId)) {
         const existing = sessions.get(sessionId);
         if (existing.isConnected && existing.sock) return;
 
         if (existing.sock) {
-            if (existing.sock.keepAliveInterval) clearInterval(existing.sock.keepAliveInterval);
             existing.sock.ev.removeAllListeners('connection.update');
             existing.sock.end(undefined);
             sessions.delete(sessionId);
@@ -265,9 +239,6 @@ async function startSession(sessionId) {
     const { wasi_sock, saveCreds } = await wasi_connectSession(false, sessionId);
     sessionState.sock = wasi_sock;
 
-    // Keep-Alive Mechanism Shuru Karna
-    startKeepAlive(wasi_sock);
-
     wasi_sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -278,39 +249,21 @@ async function startSession(sessionId) {
 
         if (connection === 'close') {
             sessionState.isConnected = false;
-            if (wasi_sock.keepAliveInterval) clearInterval(wasi_sock.keepAliveInterval);
-
             const statusCode = (lastDisconnect?.error instanceof Boom) ?
                 lastDisconnect.error.output.statusCode : 500;
 
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut && statusCode !== 440;
 
             if (shouldReconnect) {
-                sessionState.reconnectAttempts++;
-                // Exponential backoff delay calculation
-                const delay = Math.min(1000 * Math.pow(2, sessionState.reconnectAttempts), 30000);
-                console.log(`⚠ Connection closed. Reconnecting in ${delay / 1000} seconds (Attempt ${sessionState.reconnectAttempts})...`);
-                setTimeout(() => { startSession(sessionId); }, delay);
+                setTimeout(() => { startSession(sessionId); }, 3000);
             } else {
                 sessions.delete(sessionId);
                 await wasi_clearSession(sessionId);
-                console.log('❌ Session logged out permanently.');
             }
         } else if (connection === 'open') {
             sessionState.isConnected = true;
             sessionState.qr = null;
-            sessionState.reconnectAttempts = 0; // Reset attempts on successful connection
             console.log(`✅ ${sessionId}: Connected to WhatsApp`);
-
-            // Admin ko startup/reconnection par notification bhejna
-            try {
-                const adminJid = wasi_sock.user?.id ? jidNormalizedUser(wasi_sock.user.id) : null;
-                if (adminJid) {
-                    await wasi_sock.sendMessage(adminJid, { text: `🚀 Raju Bot successfully connected and online! Session ID: ${sessionId}` });
-                }
-            } catch (err) {
-                console.error('Failed to send startup notification to admin:', err.message);
-            }
         }
     });
 
@@ -329,7 +282,7 @@ async function startSession(sessionId) {
             const msgContent = wasi_msg.message;
             const senderJid = wasi_msg.key.participant || wasi_msg.key.remoteJid;
 
-            const msgText = cleanNewsletterText(
+            const msgText = (
                 msgContent.conversation || 
                 msgContent.extendedTextMessage?.text || 
                 msgContent.imageMessage?.caption || 
@@ -443,8 +396,20 @@ async function startSession(sessionId) {
                     try {
                         let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
 
-                        // (1) Forwarded Label Removal function call
-                        cleanForwardedLabel(cleanMessage);
+                        const cleanContext = (obj) => {
+                            if (!obj || typeof obj !== 'object') return;
+                            if (obj.contextInfo) {
+                                delete obj.contextInfo.forwardingScore;
+                                delete obj.contextInfo.isForwarded;
+                                obj.contextInfo.participant = "Raju Boss +923071782626";
+                            }
+                            for (let key of Object.keys(obj)) {
+                                if (typeof obj[key] === 'object') {
+                                    cleanContext(obj[key]);
+                                }
+                            }
+                        };
+                        cleanContext(cleanMessage);
 
                         if (cleanMessage.imageMessage?.caption) {
                             cleanMessage.imageMessage.caption = replaceCaption(cleanMessage.imageMessage.caption);
@@ -516,10 +481,7 @@ wasi_app.post('/api/restart', async (req, res) => {
     try {
         for (const [sessionId, session] of sessions) {
             if (session.sock) {
-                try { 
-                    if (session.sock.keepAliveInterval) clearInterval(session.sock.keepAliveInterval);
-                    session.sock.end(undefined); 
-                } catch (e) {}
+                try { session.sock.end(undefined); } catch (e) {}
             }
         }
         sessions.clear();
@@ -536,10 +498,7 @@ wasi_app.post('/api/logout', async (req, res) => {
         const session = sessions.get(sessionId);
         
         if (session && session.sock) {
-            try { 
-                if (session.sock.keepAliveInterval) clearInterval(session.sock.keepAliveInterval);
-                await session.sock.logout(); 
-            } catch (e) {}
+            try { await session.sock.logout(); } catch (e) {}
             sessions.delete(sessionId);
             await wasi_clearSession(sessionId);
         }
@@ -569,7 +528,7 @@ wasi_app.get('/api/health', async (req, res) => {
     });
 });
 
-// -------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // SERVER START
 // -----------------------------
 function wasi_startServer() {
@@ -579,9 +538,9 @@ function wasi_startServer() {
     });
 }
 
-// -----------------------------
+// -----------------------------------------------------------------------------
 // MAIN STARTUP
-// -----------------------------
+// -----------------------------------------------------------------------------
 async function main() {
     if (config.mongoDbUrl) {
         await wasi_connectDatabase(config.mongoDbUrl);
