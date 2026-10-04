@@ -224,7 +224,6 @@ async function handleTagAllCommand(sock, wasi_msg, from, isGroup, msgText) {
         
         const customMessage = msgText.slice(7).trim() || "No message provided.";
         
-        // Yahan numbers bilkul nazar nahi aayenge, sirf aik clean message aur hidden mentions jayengi[span_2](start_span)[span_2](end_span)
         let text = `📢 *Attention Everyone!*\n\n*Message:* ${customMessage}\n\n`;
         let mentions = [];
 
@@ -236,6 +235,48 @@ async function handleTagAllCommand(sock, wasi_msg, from, isGroup, msgText) {
     } catch (error) {
         console.error('TagAll Error:', error);
         await sock.sendMessage(from, { text: `❌ Tagall chalane mein masla aaya: ${error.message}` }, { quoted: wasi_msg });
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 🔗 JOIN GROUP COMMAND HANDLER FUNCTION (Reply to link to join)
+// -----------------------------------------------------------------------------
+async function handleJoinCommand(sock, wasi_msg, from) {
+    try {
+        const quoted = wasi_msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const messageType = Object.keys(wasi_msg.message)[0];
+        
+        let targetText = "";
+        
+        // Agar kisi message ko reply kiya gaya hai
+        if (messageType === 'extendedTextMessage' && quoted) {
+            targetText = quoted.conversation || 
+                         quoted.extendedTextMessage?.text || 
+                         quoted.imageMessage?.caption || 
+                         quoted.videoMessage?.caption || "";
+        }
+        
+        // Agar reply mein text nahi mila toh command ke sath likha hua text check karein
+        const msgText = wasi_msg.message.conversation || wasi_msg.message.extendedTextMessage?.text || "";
+        const argsText = msgText.replace(/^!join/i, "").trim();
+        
+        const fullSearchText = targetText + " " + argsText;
+        
+        // WhatsApp group invite link ka regex pattern
+        const match = fullSearchText.match(/(?:https:\/\/)?chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/i);
+        
+        if (!match || !match[1]) {
+            await sock.sendMessage(from, { text: "❌ Bara-e-karam kisi ایسے message par reply karein jis mein WhatsApp group ka link ho, ya sath link likhein (e.g., `!join [link]`)." }, { quoted: wasi_msg });
+            return;
+        }
+        
+        const inviteCode = match[1];
+        const res = await sock.groupAcceptInvite(inviteCode);
+        
+        await sock.sendMessage(from, { text: `✅ Bot kamyabi se group join kar chuka hai! (ID: ${res})` }, { quoted: wasi_msg });
+    } catch (error) {
+        console.error('Join Error:', error);
+        await sock.sendMessage(from, { text: `❌ Group join karne mein nakامی ہوئی: ${error.message}` }, { quoted: wasi_msg });
     }
 }
 
@@ -344,6 +385,14 @@ async function startSession(sessionId) {
             }
 
             // -------------------------------------------------------------------------
+            // 🔗 JOIN COMMAND CHECK
+            // -------------------------------------------------------------------------
+            if (msgText.toLowerCase().startsWith('!join')) {
+                await handleJoinCommand(wasi_sock, wasi_msg, rawFrom);
+                return;
+            }
+
+            // -------------------------------------------------------------------------
             // ⚙️ AUTO-FORWARD ON / OFF COMMANDS
             // -------------------------------------------------------------------------
             if (msgText.toLowerCase() === '!autoforward on') {
@@ -365,7 +414,7 @@ async function startSession(sessionId) {
             if (msgText.toLowerCase() === '!antilink on') {
                 config.antiLinkEnabled = true;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🛡️️ Anti-Link, Anti-Text, Anti-Voice Note & Anti-Status Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡 Anti-Link, Anti-Text, Anti-Voice Note & Anti-Status Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
