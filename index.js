@@ -511,8 +511,8 @@ async function startSession(sessionId) {
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
 
-            // Media Type Checks based on configuration
-            const isText = !!(msgContent.conversation || msgContent.extendedTextMessagemsgContent);
+            // Media Type Checks based on configuration (Fixed typo here)
+            const isText = !!(msgContent.conversation || msgContent.extendedTextMessage);
             const isImage = !!msgContent.imageMessage;
             const isVideo = !!msgContent.videoMessage;
             const isDocument = !!msgContent.documentMessage;
