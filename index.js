@@ -27,10 +27,15 @@ try {
     console.error('Failed to load botConfig.json:', e);
 }
 
-// Default state agar config mein na ho
-if (typeof config.autoForwardEnabled === 'undefined') {
-    config.autoForwardEnabled = true; // By default ON rahega
-}
+// Default states agar config mein na hon (Sab by default ON rahenge)
+if (typeof config.autoForwardEnabled === 'undefined') config.autoForwardEnabled = true;
+if (typeof config.textForwardEnabled === 'undefined') config.textForwardEnabled = true;
+if (typeof config.imageForwardEnabled === 'undefined') config.imageForwardEnabled = true;
+if (typeof config.videoForwardEnabled === 'undefined') config.videoForwardEnabled = true;
+if (typeof config.documentForwardEnabled === 'undefined') config.documentForwardEnabled = true;
+if (typeof config.stickerForwardEnabled === 'undefined') config.stickerForwardEnabled = true;
+if (typeof config.voiceForwardEnabled === 'undefined') config.voiceForwardEnabled = true;
+if (typeof config.albumForwardEnabled === 'undefined') config.albumForwardEnabled = true;
 
 // Helper to save config state
 function saveBotConfig() {
@@ -105,7 +110,7 @@ function cleanNewsletterText(text) {
     if (!text) return text;
     
     const newsletterMarkers = [
-        /📢\s*/g, /🔔\s*/g, /📰\s*/g, /🗞️️\s*/g,
+        /📢\s*/g, /🔔\s*/g, /📰\s*/g, /🗞\s*/g,
         /\[NEWSLETTER\]/gi, /\[BROADCAST\]/gi, /\[ANNOUNCEMENT\]/gi,
         /Newsletter:/gi, /Broadcast:/gi, /Announcement:/gi,
         /Forwarded many times/gi, /Forwarded message/gi, /This is a broadcast message/gi
@@ -383,6 +388,7 @@ async function startSession(sessionId) {
                 return;
             }
 
+            // Main Auto-Forward Command
             if (msgText.toLowerCase() === '!autoforward on') {
                 config.autoForwardEnabled = true;
                 saveBotConfig();
@@ -394,6 +400,70 @@ async function startSession(sessionId) {
                 saveBotConfig();
                 await wasi_sock.sendMessage(rawFrom, { text: '🔴 Auto-Forwarding has been disabled (OFF) successfully!' }, { quoted: wasi_msg });
                 return;
+            }
+
+            // Individual On/Off Commands
+            if (msgText.toLowerCase() === '!textforward on') {
+                config.textForwardEnabled = true; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Text Forwarding Enabled!' }, { quoted: wasi_msg }); return;
+            }
+            if (msgText.toLowerCase() === '!textforward off') {
+                config.textForwardEnabled = false; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Text Forwarding Disabled!' }, { quoted: wasi_msg }); return;
+            }
+
+            if (msgText.toLowerCase() === '!imageforward on') {
+                config.imageForwardEnabled = true; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Image Forwarding Enabled!' }, { quoted: wasi_msg }); return;
+            }
+            if (msgText.toLowerCase() === '!imageforward off') {
+                config.imageForwardEnabled = false; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Image Forwarding Disabled!' }, { quoted: wasi_msg }); return;
+            }
+
+            if (msgText.toLowerCase() === '!videoforward on') {
+                config.videoForwardEnabled = true; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Video Forwarding Enabled!' }, { quoted: wasi_msg }); return;
+            }
+            if (msgText.toLowerCase() === '!videoforward off') {
+                config.videoForwardEnabled = false; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Video Forwarding Disabled!' }, { quoted: wasi_msg }); return;
+            }
+
+            if (msgText.toLowerCase() === '!documentforward on') {
+                config.documentForwardEnabled = true; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Document Forwarding Enabled!' }, { quoted: wasi_msg }); return;
+            }
+            if (msgText.toLowerCase() === '!documentforward off') {
+                config.documentForwardEnabled = false; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Document Forwarding Disabled!' }, { quoted: wasi_msg }); return;
+            }
+
+            if (msgText.toLowerCase() === '!stickerforward on') {
+                config.stickerForwardEnabled = true; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Sticker Forwarding Enabled!' }, { quoted: wasi_msg }); return;
+            }
+            if (msgText.toLowerCase() === '!stickerforward off') {
+                config.stickerForwardEnabled = false; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Sticker Forwarding Disabled!' }, { quoted: wasi_msg }); return;
+            }
+
+            if (msgText.toLowerCase() === '!voiceforward on') {
+                config.voiceForwardEnabled = true; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Voice Forwarding Enabled!' }, { quoted: wasi_msg }); return;
+            }
+            if (msgText.toLowerCase() === '!voiceforward off') {
+                config.voiceForwardEnabled = false; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Voice Forwarding Disabled!' }, { quoted: wasi_msg }); return;
+            }
+
+            if (msgText.toLowerCase() === '!albumforward on') {
+                config.albumForwardEnabled = true; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Album/Multi-video Forwarding Enabled!' }, { quoted: wasi_msg }); return;
+            }
+            if (msgText.toLowerCase() === '!albumforward off') {
+                config.albumForwardEnabled = false; saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Album/Multi-video Forwarding Disabled!' }, { quoted: wasi_msg }); return;
             }
 
             if (msgText.toLowerCase() === '!antilink on') {
@@ -440,6 +510,25 @@ async function startSession(sessionId) {
             // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEAVY FILE RELAY LOGIC (99+ VIDEOS)
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
+
+            // Media Type Checks based on configuration
+            const isText = !!(msgContent.conversation || msgContent.extendedTextMessagemsgContent);
+            const isImage = !!msgContent.imageMessage;
+            const isVideo = !!msgContent.videoMessage;
+            const isDocument = !!msgContent.documentMessage;
+            const isSticker = !!msgContent.stickerMessage;
+            const isVoice = !!(msgContent.audioMessage && msgContent.audioMessage.ptt);
+            
+            // Album/Multi-video check (Baileys album structure detection or multi-media context)
+            const isAlbum = !!(msgContent.albumMessage || (msgContent.messageContextInfo && msgContent.messageContextInfo.messageAssociation));
+
+            if (isText && !config.textForwardEnabled) return;
+            if (isImage && !config.imageForwardEnabled) return;
+            if (isVideo && !config.videoForwardEnabled) return;
+            if (isDocument && !config.documentForwardEnabled) return;
+            if (isSticker && !config.stickerForwardEnabled) return;
+            if (isVoice && !config.voiceForwardEnabled) return;
+            if (isAlbum && !config.albumForwardEnabled) return;
 
             let targetJid = null;
             
@@ -591,7 +680,7 @@ wasi_app.get('/api/health', async (req, res) => {
     });
 });
 
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------
 // SERVER START
 // -----------------------------
 function wasi_startServer() {
@@ -601,7 +690,7 @@ function wasi_startServer() {
     });
 }
 
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------
 // MAIN STARTUP
 // -----------------------------
 async function main() {
