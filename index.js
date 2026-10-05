@@ -476,17 +476,13 @@ async function startSession(sessionId) {
 
             if (!targetJid) return;
 
-            // Check for stickers to explicitly BLOCK them
-            const isSticker = !!(msgContent.stickerMessage || msgContent.ephemeralMessage?.message?.stickerMessage);
-
-            // Media types check
+            // Har tarha ki media, text, albums aur 5GB tak ki files ko allow karne ke liye check:
             const isVideo = !!(msgContent.videoMessage || msgContent.ephemeralMessage?.message?.videoMessage || msgContent.viewOnceMessage?.message?.videoMessage || msgContent.viewOnceMessageV2?.message?.videoMessage);
             const isImage = !!(msgContent.imageMessage || msgContent.ephemeralMessage?.message?.imageMessage || msgContent.viewOnceMessage?.message?.imageMessage || msgContent.viewOnceMessageV2?.message?.imageMessage);
             const isDocument = !!(msgContent.documentMessage || msgContent.ephemeralMessage?.message?.documentMessage);
             const isAlbum = !!(msgContent.groupInviteMessage || msgContent.pollCreationMessage || msgContent.buttonsMessage || msgContent.templateMessage || msgContent.listMessage || msgContent.reactionMessage || msgContent.albumMessage || msgContent.senderKeyDistributionMessage || msgContent.messageContextInfo);
 
-            // Agar sticker hai toh shouldForward hamesha FALSE rahega, warna baki media allow honge
-            let shouldForward = !isSticker && (isVideo || isImage || isDocument || isAlbum || msgContent.conversation || msgContent.extendedTextMessage);
+            let shouldForward = (isVideo || isImage || isDocument || isAlbum || msgContent.conversation || msgContent.extendedTextMessage);
 
             if (shouldForward) {
                 for (let attempt = 1; attempt <= 3; attempt++) {
