@@ -27,11 +27,6 @@ try {
     console.error('Failed to load botConfig.json:', e);
 }
 
-// Default state agar config mein na ho
-if (typeof config.autoForwardEnabled === 'undefined') {
-    config.autoForwardEnabled = true; // By default ON rahega
-}
-
 // Helper to save config state
 function saveBotConfig() {
     try {
@@ -84,6 +79,13 @@ const NEW_TEXT = process.env.NEW_TEXT
     ? process.env.NEW_TEXT
     : '';
 
+/* 
+  📌 Simple Direct Mapping Setup:
+  Ab aap Heroku ya .env mein FORWARD_MAP ko is tarhan likhein ge:
+  SOURCE_JID:TARGET_JID
+  Misal ke tor par:
+  120363420352438696@g.us:120363404925595332@g.us,120363413621160654@g.us:120363404925595332@g.us
+*/
 let FORWARD_MAP = {};
 try {
     if (process.env.FORWARD_MAP) {
@@ -191,7 +193,7 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 
         const isImg = targetMsg.message?.imageMessage || targetMsg.message?.ephemeralMessage?.message?.imageMessage;
         if (!isImg) {
-            await sock.sendMessage(from, { text: "❌ Bara-e-karam koi tasveer bhejiye ya kisi tasveer ko reply karke !fullpp likhiye." });
+            await sock.sendMessage(from, { text: "❌ Bara-e-karam koi tasveer bhejiye ya kisi tasveer کو reply karke !fullpp likhiye." });
             return;
         }
 
@@ -202,81 +204,10 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 
         const botId = sock.user.id;
         await sock.updateProfilePicture(botId, stream);
-        await sock.sendMessage(from, { text: "✅ Bot ki profile picture kamyabi se update ho gayi hai!" });
+        await sock.sendMessage(from, { text: "✅ Bot کی profile picture kamyabi se update ho gayi hai!" });
     } catch (error) {
         console.error('FullPP Error:', error);
         await sock.sendMessage(from, { text: `❌ Profile picture update karne mein masla aaya: ${error.message}` });
-    }
-}
-
-// -----------------------------------------------------------------------------
-// 📢 HIDETAGALL COMMAND HANDLER FUNCTION (Numbers hidden, all mentioned)
-// -----------------------------------------------------------------------------
-async function handleTagAllCommand(sock, wasi_msg, from, isGroup, msgText) {
-    if (!isGroup) {
-        await sock.sendMessage(from, { text: "❌ Yeh command sirf groups mein istemal ho sakti hai!" }, { quoted: wasi_msg });
-        return;
-    }
-
-    try {
-        const groupMetadata = await sock.groupMetadata(from);
-        const participants = groupMetadata.participants || [];
-        
-        const customMessage = msgText.slice(7).trim() || "No message provided.";
-        
-        let text = `📢 *Attention Everyone!*\n\n*Message:* ${customMessage}\n\n`;
-        let mentions = [];
-
-        for (let mem of participants) {
-            mentions.push(mem.id);
-        }
-
-        await sock.sendMessage(from, { text: text, mentions: mentions }, { quoted: wasi_msg });
-    } catch (error) {
-        console.error('TagAll Error:', error);
-        await sock.sendMessage(from, { text: `❌ Tagall chalane mein masla aaya: ${error.message}` }, { quoted: wasi_msg });
-    }
-}
-
-// -----------------------------------------------------------------------------
-// 🔗 JOIN GROUP COMMAND HANDLER FUNCTION (Reply to link to join)
-// -----------------------------------------------------------------------------
-async function handleJoinCommand(sock, wasi_msg, from) {
-    try {
-        const quoted = wasi_msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-        const messageType = Object.keys(wasi_msg.message)[0];
-        
-        let targetText = "";
-        
-        // Agar kisi message ko reply kiya gaya hai
-        if (messageType === 'extendedTextMessage' && quoted) {
-            targetText = quoted.conversation || 
-                         quoted.extendedTextMessage?.text || 
-                         quoted.imageMessage?.caption || 
-                         quoted.videoMessage?.caption || "";
-        }
-        
-        // Agar reply mein text nahi mila toh command ke sath likha hua text check karein
-        const msgText = wasi_msg.message.conversation || wasi_msg.message.extendedTextMessage?.text || "";
-        const argsText = msgText.replace(/^!join/i, "").trim();
-        
-        const fullSearchText = targetText + " " + argsText;
-        
-        // WhatsApp group invite link ka regex pattern
-        const match = fullSearchText.match(/(?:https:\/\/)?chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/i);
-        
-        if (!match || !match[1]) {
-            await sock.sendMessage(from, { text: "❌ Bara-e-karam kisi ایسے message par reply karein jis mein WhatsApp group ka link ho, ya sath link likhein (e.g., `!join [link]`)." }, { quoted: wasi_msg });
-            return;
-        }
-        
-        const inviteCode = match[1];
-        const res = await sock.groupAcceptInvite(inviteCode);
-        
-        await sock.sendMessage(from, { text: `✅ Bot kamyabi se group join kar chuka hai! (ID: ${res})` }, { quoted: wasi_msg });
-    } catch (error) {
-        console.error('Join Error:', error);
-        await sock.sendMessage(from, { text: `❌ Group join karne mein nakامی ہوئی: ${error.message}` }, { quoted: wasi_msg });
     }
 }
 
@@ -377,44 +308,12 @@ async function startSession(sessionId) {
             }
 
             // -------------------------------------------------------------------------
-            // 📢 TAGALL COMMAND CHECK
-            // -------------------------------------------------------------------------
-            if (msgText.toLowerCase().startsWith('!tagall')) {
-                await handleTagAllCommand(wasi_sock, wasi_msg, rawFrom, isGroup, msgText);
-                return;
-            }
-
-            // -------------------------------------------------------------------------
-            // 🔗 JOIN COMMAND CHECK
-            // -------------------------------------------------------------------------
-            if (msgText.toLowerCase().startsWith('!join')) {
-                await handleJoinCommand(wasi_sock, wasi_msg, rawFrom);
-                return;
-            }
-
-            // -------------------------------------------------------------------------
-            // ⚙️ AUTO-FORWARD ON / OFF COMMANDS
-            // -------------------------------------------------------------------------
-            if (msgText.toLowerCase() === '!autoforward on') {
-                config.autoForwardEnabled = true;
-                saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Auto-Forwarding has been enabled (ON) successfully!' }, { quoted: wasi_msg });
-                return;
-            }
-            if (msgText.toLowerCase() === '!autoforward off') {
-                config.autoForwardEnabled = false;
-                saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Auto-Forwarding has been disabled (OFF) successfully!' }, { quoted: wasi_msg });
-                return;
-            }
-
-            // -------------------------------------------------------------------------
             // ⚙️ ANTILINK ON / OFF COMMANDS
             // -------------------------------------------------------------------------
             if (msgText.toLowerCase() === '!antilink on') {
                 config.antiLinkEnabled = true;
                 saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🛡 Anti-Link, Anti-Text, Anti-Voice Note & Anti-Status Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡️ Anti-Link, Anti-Text, Anti-Voice Note & Anti-Status Protection has been enabled (ON) for members only! Admins are completely bypassed.' }, { quoted: wasi_msg });
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
@@ -445,23 +344,23 @@ async function startSession(sessionId) {
                         const isAdmin = senderParticipant && (senderParticipant.admin === 'admin' || senderParticipant.admin === 'superadmin');
 
                         if (isAdmin) {
+                            console.log(`[!] Admin ${senderJid} sent restricted content in group ${rawFrom}. Bypassed completely.`);
                             return; 
                         }
 
                         await wasi_sock.sendMessage(rawFrom, { delete: wasi_msg.key });
                         await wasi_sock.groupParticipantsUpdate(rawFrom, [senderJid], 'remove');
+                        console.log(`[!] Removed normal member ${senderJid} for sending restricted content/voice note in group ${rawFrom}`);
                         return; 
                     } catch (err) {
-                        console.error('❌ Anti-protection kick error:', err.message);
+                        console.error('❌ Anti-protection kick error (Make sure bot is admin):', err.message);
                     }
                 }
             }
                  
             // =========================================================================
-            // ⚡ SIMPLE SOURCE:TARGET FORWARD MAPPING & ZERO MEMORY RELAY LOGIC
+            // ⚡ SIMPLE SOURCE:TARGET FORWARD MAPPING LOGIC
             // =========================================================================
-            if (config.autoForwardEnabled === false) return;
-
             let targetJid = null;
             
             const matchedSourceKey = Object.keys(FORWARD_MAP).find(src => cleanFrom.includes(cleanJid(src)));
@@ -471,18 +370,26 @@ async function startSession(sessionId) {
                 const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
                 if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
                 const targets = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
-                targetJid = targets[0]; 
+                targetJid = targets[0]; // Fallback to first target
             }
 
             if (!targetJid) return;
 
-            // Har tarha ki media, text, albums aur 5GB tak ki files ko allow karne ke liye check:
+            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document')
+                .toLowerCase()
+                .split(',')
+                .map(t => t.trim());
+
             const isVideo = !!(msgContent.videoMessage || msgContent.ephemeralMessage?.message?.videoMessage || msgContent.viewOnceMessage?.message?.videoMessage || msgContent.viewOnceMessageV2?.message?.videoMessage);
             const isImage = !!(msgContent.imageMessage || msgContent.ephemeralMessage?.message?.imageMessage || msgContent.viewOnceMessage?.message?.imageMessage || msgContent.viewOnceMessageV2?.message?.imageMessage);
             const isDocument = !!(msgContent.documentMessage || msgContent.ephemeralMessage?.message?.documentMessage);
-            const isAlbum = !!(msgContent.groupInviteMessage || msgContent.pollCreationMessage || msgContent.buttonsMessage || msgContent.templateMessage || msgContent.listMessage || msgContent.reactionMessage || msgContent.albumMessage || msgContent.senderKeyDistributionMessage || msgContent.messageContextInfo);
+            const isAlbum = !!(msgContent.groupInviteMessage || msgContent.pollCreationMessage || msgContent.buttonsMessage || msgContent.templateMessage || msgContent.listMessage || msgContent.reactionMessage || msgContent.albumMessage);
 
-            let shouldForward = (isVideo || isImage || isDocument || isAlbum || msgContent.conversation || msgContent.extendedTextMessage);
+            let shouldForward = false;
+            if (isVideo && allowedTypes.includes('video')) shouldForward = true;
+            if (isImage && allowedTypes.includes('image')) shouldForward = true;
+            if (isDocument && allowedTypes.includes('document')) shouldForward = true;
+            if (isAlbum) shouldForward = true;
 
             if (shouldForward) {
                 for (let attempt = 1; attempt <= 3; attempt++) {
@@ -514,13 +421,16 @@ async function startSession(sessionId) {
                             cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
                         }
 
-                        // Direct Server-to-Server Relay (Zero Memory / RAM usage, ideal for 5GB+ files & 100+ albums)
-                        await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
+                        try {
+                            await wasi_sock.sendMessage(targetJid, cleanMessage);
+                        } catch (mediaErr) {
+                            await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
+                        }
 
-                        console.log(`[+] High-speed media/album forwarded from ${cleanFrom} to ${targetJid}`);
+                        console.log(`[+] Media forwarded from ${cleanFrom} to ${targetJid}`);
                         break;
                     } catch (err) {
-                        console.error(`[!] Attempt ${attempt} relay failed for ${targetJid}:`, err.message);
+                        console.error(`[!] Attempt ${attempt} failed for ${targetJid}:`, err.message);
                         if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
                     }
                 }
@@ -630,7 +540,7 @@ function wasi_startServer() {
 
 // -----------------------------------------------------------------------------
 // MAIN STARTUP
-// -----------------------------
+// -----------------------------------------------------------------------------
 async function main() {
     if (config.mongoDbUrl) {
         await wasi_connectDatabase(config.mongoDbUrl);
