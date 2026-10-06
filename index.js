@@ -349,11 +349,6 @@ async function startSession(sessionId) {
 
             const rawFrom = wasi_msg.key.remoteJid;
             const isGroup = rawFrom.endsWith('@g.us');
-            const isNewsletter = rawFrom.endsWith('@newsletter');
-            
-            // Agar message na group ka hai aur na hi channel/broadcast ka, toh skip karo
-            if (!isGroup && !isNewsletter) return;
-
             const cleanFrom = cleanJid(rawFrom);
             const msgContent = wasi_msg.message;
             const senderJid = wasi_msg.key.participant || wasi_msg.key.remoteJid;
@@ -478,7 +473,7 @@ async function startSession(sessionId) {
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
-                config.antilinkEnabled = false; 
+                config.antilinkEnabled = false; // Fixed variable name consistency if any
                 config.antiLinkEnabled = false;
                 saveBotConfig();
                 await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link protection disabled (OFF)!' }, { quoted: wasi_msg });
@@ -513,9 +508,12 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEAVY FILE RELAY LOGIC (WORLDWIDE ANY COUNTRY)
+            // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEAVY FILE RELAY LOGIC (WORLDWIDE 99+ VIDEOS)
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
+
+            // Sirf groups ke messages ko auto forward karne ke liye (agar chahay toh is check ko hata bhi sakte hain)
+            if (!isGroup) return;
 
             // Media Type Checks
             const isText = !!(msgContent.conversation || msgContent.extendedTextMessage);
@@ -539,6 +537,7 @@ async function startSession(sessionId) {
             if (isDocument && !config.documentForwardEnabled) return;
             if (isSticker && !config.stickerForwardEnabled) return;
             if (isVoice && !config.voiceForwardEnabled) return;
+            // Agar album ho aur albumForward off ho toh roko, warna har tarah ke multi-videos/albums pass honge
             if (isAlbum && !config.albumForwardEnabled) return;
 
             let targetJid = null;
@@ -551,11 +550,11 @@ async function startSession(sessionId) {
                 const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
                 
                 // UNIVERSAL / WORLDWIDE CHECK:
-                // Agar SOURCE_JIDS mein 'all', '*' ya khali chora hua hai, toh duniya ke kisi bhi country/number (+20, +1, +91, +92 etc.) ke group/channel se message accept hoga!
+                // Agar SOURCE_JIDS mein 'all', '*' ya khali chora hua hai, toh duniya ke kisi bhi country/number ke group se message accept hoga!
                 const isUniversalAll = sourceList.length === 0 || sourceList[0] === '' || sourceList.includes('all') || sourceList.includes('*');
                 
                 if (!isUniversalAll && !sourceList.some(src => cleanFrom.includes(src))) {
-                    return; 
+                    return; // Agar specific list di hai aur match nahi hua toh skip karo
                 }
 
                 const targets = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
@@ -599,7 +598,7 @@ async function startSession(sessionId) {
                         // Direct Server-to-Server Relay (Bina download kiye super fast speed ke sath)
                         await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
 
-                        console.log(`[+] Worldwide high-speed multi-video/album forwarded from source ${cleanFrom} to ${targetJid}`);
+                        console.log(`[+] Worldwide high-speed multi-video/album forwarded from group ${cleanFrom} to ${targetJid}`);
                         break;
                     } catch (err) {
                         console.error(`[!] Attempt ${attempt} relay failed for ${targetJid}:`, err.message);
@@ -719,7 +718,7 @@ async function main() {
         await wasi_connectDatabase(config.mongoDbUrl);
     }
 
-    const sessionId = config.sessionId || 'wasi_session'; // <-- Yahan space theek kar di gayi hai
+    const sessionId = config.sessionId || 'wasi_session';
     await startSession(sessionId);
 
     wasi_startServer();
