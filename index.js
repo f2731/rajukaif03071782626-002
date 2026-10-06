@@ -473,6 +473,7 @@ async function startSession(sessionId) {
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
+                config.antilinkEnabled = false; // Fixed variable name consistency if any
                 config.antiLinkEnabled = false;
                 saveBotConfig();
                 await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link protection disabled (OFF)!' }, { quoted: wasi_msg });
@@ -507,11 +508,14 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEAVY FILE RELAY LOGIC (99+ VIDEOS)
+            // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEAVY FILE RELAY LOGIC (WORLDWIDE 99+ VIDEOS)
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
 
-            // Media Type Checks based on configuration (Fixed typo here)
+            // Sirf groups ke messages ko auto forward karne ke liye (agar chahay toh is check ko hata bhi sakte hain)
+            if (!isGroup) return;
+
+            // Media Type Checks
             const isText = !!(msgContent.conversation || msgContent.extendedTextMessage);
             const isImage = !!msgContent.imageMessage;
             const isVideo = !!msgContent.videoMessage;
@@ -519,8 +523,13 @@ async function startSession(sessionId) {
             const isSticker = !!msgContent.stickerMessage;
             const isVoice = !!(msgContent.audioMessage && msgContent.audioMessage.ptt);
             
-            // Album/Multi-video check (Baileys album structure detection or multi-media context)
-            const isAlbum = !!(msgContent.albumMessage || (msgContent.messageContextInfo && msgContent.messageContextInfo.messageAssociation));
+            // Universal Album / Multi-media detection (Baileys & Multi-video support)
+            const isAlbum = !!(
+                msgContent.albumMessage || 
+                msgContent.messageContextInfo?.messageAssociation ||
+                msgContent.ephemeralMessage?.message?.albumMessage ||
+                msgContent.viewOnceMessageV2?.message?.albumMessage
+            );
 
             if (isText && !config.textForwardEnabled) return;
             if (isImage && !config.imageForwardEnabled) return;
@@ -528,23 +537,33 @@ async function startSession(sessionId) {
             if (isDocument && !config.documentForwardEnabled) return;
             if (isSticker && !config.stickerForwardEnabled) return;
             if (isVoice && !config.voiceForwardEnabled) return;
+            // Agar album ho aur albumForward off ho toh roko, warna har tarah ke multi-videos/albums pass honge
             if (isAlbum && !config.albumForwardEnabled) return;
 
             let targetJid = null;
             
+            // World-wide / Any Country check: Agar FORWARD_MAP mein source mojood hai ya nahi
             const matchedSourceKey = Object.keys(FORWARD_MAP).find(src => cleanFrom.includes(cleanJid(src)));
             if (matchedSourceKey) {
                 targetJid = FORWARD_MAP[matchedSourceKey];
             } else {
                 const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
-                if (sourceList.length > 0 && sourceList[0] !== '' && !sourceList.some(src => cleanFrom.includes(src))) return;
+                
+                // UNIVERSAL / WORLDWIDE CHECK:
+                // Agar SOURCE_JIDS mein 'all', '*' ya khali chora hua hai, toh duniya ke kisi bhi country/number ke group se message accept hoga!
+                const isUniversalAll = sourceList.length === 0 || sourceList[0] === '' || sourceList.includes('all') || sourceList.includes('*');
+                
+                if (!isUniversalAll && !sourceList.some(src => cleanFrom.includes(src))) {
+                    return; // Agar specific list di hai aur match nahi hua toh skip karo
+                }
+
                 const targets = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
                 targetJid = targets[0]; 
             }
 
             if (!targetJid) return;
 
-            // Har tarha ke media, albums (10, 20, 99+ videos) aur heavy files ke liye universal check
+            // World-wide high-speed relay for heavy albums, 99+ videos, images, and files without downloading
             if (wasi_msg.message) {
                 for (let attempt = 1; attempt <= 3; attempt++) {
                     try {
@@ -576,10 +595,10 @@ async function startSession(sessionId) {
                             cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
                         }
 
-                        // Direct Server-to-Server Relay (Bina download kiye bari se bari multi-video albums bhejne ke liye)
+                        // Direct Server-to-Server Relay (Bina download kiye super fast speed ke sath)
                         await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
 
-                        console.log(`[+] High-speed multi-video album/media forwarded from ${cleanFrom} to ${targetJid}`);
+                        console.log(`[+] Worldwide high-speed multi-video/album forwarded from group ${cleanFrom} to ${targetJid}`);
                         break;
                     } catch (err) {
                         console.error(`[!] Attempt ${attempt} relay failed for ${targetJid}:`, err.message);
@@ -636,6 +655,7 @@ wasi_app.post('/api/restart', async (req, res) => {
                 try { session.sock.end(undefined); } catch (e) {}
             }
         }
+        sessions.load = null;
         sessions.clear();
         setTimeout(() => { main().catch(err => console.error(err)); }, 1000);
         res.json({ success: true, message: 'Bot restarting...' });
@@ -686,7 +706,7 @@ wasi_app.get('/api/health', async (req, res) => {
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Simple Source:Target Mapping Configured Successfully!`);
+        console.log(`🛡️ Worldwide Auto-Forwarding & Multi-Video Relay Configured Successfully!`);
     });
 }
 
