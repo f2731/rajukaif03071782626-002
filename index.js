@@ -719,7 +719,7 @@ async function main() {
         await wasi_connectDatabase(config.mongoDbUrl);
     }
 
-    constsessionId = config.sessionId || 'wasi_session';
+    const sessionId = config.sessionId || 'wasi_session'; // <-- Yahan space theek kar di gayi hai
     await startSession(sessionId);
 
     wasi_startServer();
