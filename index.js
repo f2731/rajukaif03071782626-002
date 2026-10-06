@@ -29,12 +29,12 @@ try {
 
 // Default states agar config mein na hon (Sab by default ON rahenge)
 if (typeof config.autoForwardEnabled === 'undefined') config.autoForwardEnabled = true;
-if (typeof config.textForwardEnabled === 'undefined') config.textForwardEnabled = true;
+if (typeof config.textForwardEnabled === 'undefined') config.textForwardEnabled = false;
 if (typeof config.imageForwardEnabled === 'undefined') config.imageForwardEnabled = true;
 if (typeof config.videoForwardEnabled === 'undefined') config.videoForwardEnabled = true;
 if (typeof config.documentForwardEnabled === 'undefined') config.documentForwardEnabled = true;
-if (typeof config.stickerForwardEnabled === 'undefined') config.stickerForwardEnabled = true;
-if (typeof config.voiceForwardEnabled === 'undefined') config.voiceForwardEnabled = true;
+if (typeof config.stickerForwardEnabled === 'undefined') config.stickerForwardEnabled = false;
+if (typeof config.voiceForwardEnabled === 'undefined') config.voiceForwardEnabled = false;
 if (typeof config.albumForwardEnabled === 'undefined') config.albumForwardEnabled = true;
 
 // Helper to save config state
