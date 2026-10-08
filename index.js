@@ -103,6 +103,11 @@ try {
     console.error('Failed to parse FORWARD_MAP:', e);
 }
 
+// Helper to get target JIDs for manual forwarding
+function getTargetJids() {
+    return process.env.TARGET_JIDS ? process.env.TARGET_JIDS.split(',').map(id => id.trim()).filter(Boolean) : [];
+}
+
 // -----------------------------------------------------------------------------
 // HELPER FUNCTIONS FOR MESSAGE CLEANING
 // -----------------------------------------------------------------------------
@@ -388,6 +393,71 @@ async function startSession(sessionId) {
                 return;
             }
 
+            // MANUAL FORWARD COMMAND (!forward)
+            if (msgText.toLowerCase().startsWith('!forward')) {
+                try {
+                    const quotedMsg = msgContent.extendedTextMessage?.contextInfo?.quotedMessage;
+                    if (!quotedMsg) {
+                        await wasi_sock.sendMessage(rawFrom, { text: '❌ Bara-e-karam us message ko reply karke !forward likhen jo aap bhejwana chahte hain!' }, { quoted: wasi_msg });
+                        return;
+                    }
+
+                    let forwardContent = JSON.parse(JSON.stringify(quotedMsg));
+                    if (forwardContent.viewOnceMessageV2) {
+                        forwardContent = forwardContent.viewOnceMessageV2.message;
+                    } else if (forwardContent.viewOnceMessage) {
+                        forwardContent = forwardContent.viewOnceMessage.message;
+                    } else if (forwardContent.documentWithCaptionMessage) {
+                        forwardContent = forwardContent.documentWithCaptionMessage.message;
+                    }
+
+                    const args = msgText.split(' ');
+                    let targetList = [];
+
+                    if (args.length > 1 && args[1].includes('@')) {
+                        targetList = [args[1].trim()];
+                    } else {
+                        targetList = getTargetJids();
+                    }
+
+                    if (targetList.length === 0) {
+                        await wasi_sock.sendMessage(rawFrom, { text: '❌ Koi target JID configure nahi hai!' }, { quoted: wasi_msg });
+                        return;
+                    }
+
+                    let successCount = 0;
+                    for (const targetJid of targetList) {
+                        try {
+                            let finalPayload = JSON.parse(JSON.stringify(forwardContent));
+                            
+                            const messageTypes = ['conversation', 'extendedTextMessage', 'imageMessage', 'videoMessage', 'documentMessage', 'audioMessage', 'stickerMessage'];
+                            for (const type of messageTypes) {
+                                if (finalPayload[type]?.contextInfo) {
+                                    delete finalPayload[type].contextInfo.forwardingScore;
+                                    delete finalPayload[type].contextInfo.isForwarded;
+                                    finalPayload[type].contextInfo.participant = "Raju Boss +923071782626";
+                                }
+                            }
+
+                            await wasi_sock.relayMessage(targetJid, finalPayload, { messageId: wasi_msg.key.id });
+                            successCount++;
+                        } catch (mediaErr) {
+                            console.error(`Forward error for ${targetJid}:`, mediaErr.message);
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 800));
+                    }
+
+                    if (successCount > 0) {
+                        await wasi_sock.sendMessage(rawFrom, { text: '✅ Message (Document/Media) kamyabi se forward kar diya gaya hai!' }, { quoted: wasi_msg });
+                    } else {
+                        await wasi_sock.sendMessage(rawFrom, { text: '❌ Message forward nahi ho saka. Console log check karein.' }, { quoted: wasi_msg });
+                    }
+                } catch (err) {
+                    await wasi_sock.sendMessage(rawFrom, { text: `❌ Forward karne mein nakami: ${err.message}` }, { quoted: wasi_msg });
+                }
+                return;
+            }
+
             // Main Auto-Forward Command
             if (msgText.toLowerCase() === '!autoforward on') {
                 config.autoForwardEnabled = true;
@@ -473,7 +543,7 @@ async function startSession(sessionId) {
                 return;
             }
             if (msgText.toLowerCase() === '!antilink off') {
-                config.antilinkEnabled = false; // Fixed variable name consistency if any
+                config.antilinkEnabled = false; 
                 config.antiLinkEnabled = false;
                 saveBotConfig();
                 await wasi_sock.sendMessage(rawFrom, { text: '⚠️ Anti-Link protection disabled (OFF)!' }, { quoted: wasi_msg });
@@ -512,7 +582,7 @@ async function startSession(sessionId) {
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
 
-            // Sirf groups ke messages ko auto forward karne ke liye (agar chahay toh is check ko hata bhi sakte hain)
+            // Sirf groups ke messages ko auto forward karne ke liye
             if (!isGroup) return;
 
             // Media Type Checks
@@ -523,7 +593,7 @@ async function startSession(sessionId) {
             const isSticker = !!msgContent.stickerMessage;
             const isVoice = !!(msgContent.audioMessage && msgContent.audioMessage.ptt);
             
-            // Universal Album / Multi-media detection (Baileys & Multi-video support)
+            // Universal Album / Multi-media detection
             const isAlbum = !!(
                 msgContent.albumMessage || 
                 msgContent.messageContextInfo?.messageAssociation ||
@@ -537,24 +607,19 @@ async function startSession(sessionId) {
             if (isDocument && !config.documentForwardEnabled) return;
             if (isSticker && !config.stickerForwardEnabled) return;
             if (isVoice && !config.voiceForwardEnabled) return;
-            // Agar album ho aur albumForward off ho toh roko, warna har tarah ke multi-videos/albums pass honge
             if (isAlbum && !config.albumForwardEnabled) return;
 
             let targetJid = null;
             
-            // World-wide / Any Country check: Agar FORWARD_MAP mein source mojood hai ya nahi
             const matchedSourceKey = Object.keys(FORWARD_MAP).find(src => cleanFrom.includes(cleanJid(src)));
             if (matchedSourceKey) {
                 targetJid = FORWARD_MAP[matchedSourceKey];
             } else {
                 const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
-                
-                // UNIVERSAL / WORLDWIDE CHECK:
-                // Agar SOURCE_JIDS mein 'all', '*' ya khali chora hua hai, toh duniya ke kisi bhi country/number ke group se message accept hoga!
                 const isUniversalAll = sourceList.length === 0 || sourceList[0] === '' || sourceList.includes('all') || sourceList.includes('*');
                 
                 if (!isUniversalAll && !sourceList.some(src => cleanFrom.includes(src))) {
-                    return; // Agar specific list di hai aur match nahi hua toh skip karo
+                    return; 
                 }
 
                 const targets = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
@@ -563,7 +628,6 @@ async function startSession(sessionId) {
 
             if (!targetJid) return;
 
-            // World-wide high-speed relay for heavy albums, 99+ videos, images, and files without downloading
             if (wasi_msg.message) {
                 for (let attempt = 1; attempt <= 3; attempt++) {
                     try {
@@ -584,7 +648,6 @@ async function startSession(sessionId) {
                         };
                         cleanContext(cleanMessage);
 
-                        // Caption replacement agar maujood ho
                         if (cleanMessage.imageMessage?.caption) {
                             cleanMessage.imageMessage.caption = replaceCaption(cleanMessage.imageMessage.caption);
                         }
@@ -595,7 +658,6 @@ async function startSession(sessionId) {
                             cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
                         }
 
-                        // Direct Server-to-Server Relay (Bina download kiye super fast speed ke sath)
                         await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
 
                         console.log(`[+] Worldwide high-speed multi-video/album forwarded from group ${cleanFrom} to ${targetJid}`);
@@ -706,7 +768,7 @@ wasi_app.get('/api/health', async (req, res) => {
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Worldwide Auto-Forwarding & Multi-Video Relay Configured Successfully!`);
+        console.log(`🛡️ Worldwide Auto-Forwarding, Multi-Video Relay & !forward Command Configured!`);
     });
 }
 
