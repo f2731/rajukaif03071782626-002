@@ -567,7 +567,7 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEROKU CONFIG FORWARD_TYPES LOGIC
+            // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEROKU CONFIG FORWARD_TYPES LOGIC (WITH VOICE)
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
 
@@ -575,7 +575,7 @@ async function startSession(sessionId) {
             if (!isGroup) return;
 
             // Heroku Env se allowed forward types read karna (e.g. video, image, document, text, sticker, voice)
-            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document,album,text')
+            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document,album,text,voice')
                 .toLowerCase()
                 .split(',')
                 .map(t => t.trim());
