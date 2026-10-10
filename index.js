@@ -9,6 +9,8 @@ const { Boom } = require('@hapi/boom');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
+const cheerio = require('cheerio');
 
 const { wasi_connectSession, wasi_clearSession } = require('./wasilib/session');
 const { wasi_connectDatabase } = require('./wasilib/database');
@@ -27,14 +29,8 @@ try {
     console.error('Failed to load botConfig.json:', e);
 }
 
-// Default states agar config mein na hon (Sab by default ON rahenge)
+// Default state for main auto forward
 if (typeof config.autoForwardEnabled === 'undefined') config.autoForwardEnabled = true;
-if (typeof config.textForwardEnabled === 'undefined') config.textForwardEnabled = false;
-if (typeof config.imageForwardEnabled === 'undefined') config.imageForwardEnabled = true;
-if (typeof config.videoForwardEnabled === 'undefined') config.videoForwardEnabled = true;
-if (typeof config.documentForwardEnabled === 'undefined') config.documentForwardEnabled = true;
-if (typeof config.stickerForwardEnabled === 'undefined') config.stickerForwardEnabled = false;
-if (typeof config.voiceForwardEnabled === 'undefined') config.voiceForwardEnabled = false;
 if (typeof config.albumForwardEnabled === 'undefined') config.albumForwardEnabled = true;
 
 // Helper to save config state
@@ -116,7 +112,7 @@ function cleanNewsletterText(text) {
     
     const newsletterMarkers = [
         /📢\s*/g, /🔔\s*/g, /📰\s*/g, /🗞\s*/g,
-        /\[NEWSLETTER\]/gi, /\[BROADCAST\]/gi, /\[ANNOUNCEMENT\]/gi,
+        /[NEWSLETTER]/gi, /[BROADCAST]/gi, /[ANNOUNCEMENT]/gi,
         /Newsletter:/gi, /Broadcast:/gi, /Announcement:/gi,
         /Forwarded many times/gi, /Forwarded message/gi, /This is a broadcast message/gi
     ];
@@ -216,6 +212,58 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
     } catch (error) {
         console.error('FullPP Error:', error);
         await sock.sendMessage(from, { text: `❌ Profile picture update karne mein masla aaya: ${error.message}` });
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 🎬 MOVIE SEARCH HANDLER FUNCTION
+// -----------------------------------------------------------------------------
+async function handleMovieSearchCommand(sock, wasi_msg, from, msgText) {
+    const query = msgText.replace(/^!movie/i, "").trim();
+    if (!query) {
+        await sock.sendMessage(from, { text: "❌ Bara-e-karam movie ka naam likhein. Misal ke tor par: `!movie Batman`" }, { quoted: wasi_msg });
+        return;
+    }
+
+    await sock.sendMessage(from, { text: `🔍 Searching for "${query}" on HDHub4u...` }, { quoted: wasi_msg });
+
+    try {
+        const searchUrl = `https://new2.hdhub4u.free/?s=${encodeURIComponent(query)}`;
+        const { data } = await axios.get(searchUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            },
+            timeout: 10000
+        });
+
+        const $ = cheerio.load(data);
+        let results = [];
+
+        $('a').each((i, element) => {
+            const href = $(element).attr('href');
+            const title = $(element).text().trim();
+            if (href && title && title.toLowerCase().includes(query.toLowerCase()) && href.includes('hdhub4u')) {
+                if (!results.some(r => r.url === href)) {
+                    results.push({ title, url: href });
+                }
+            }
+        });
+
+        if (results.length === 0) {
+            await sock.sendMessage(from, { text: "❌ Maazrat, is naam se koi movie nahi mili ya website par protection/layout change hai." }, { quoted: wasi_msg });
+            return;
+        }
+
+        let response = `🎬 *Search Results for "${query}":*\n\n`;
+        results.slice(0, 3).forEach((item, index) => {
+            response += `${index + 1}. *${item.title}*\n🔗 Link: ${item.url}\n\n`;
+        });
+
+        await sock.sendMessage(from, { text: response }, { quoted: wasi_msg });
+
+    } catch (error) {
+        console.error('Movie Search Error:', error);
+        await sock.sendMessage(from, { text: `❌ Movie dhoondne mein masla aaya: ${error.message}` }, { quoted: wasi_msg });
     }
 }
 
@@ -383,6 +431,11 @@ async function startSession(sessionId) {
                 return;
             }
 
+            if (msgText.toLowerCase().startsWith('!movie')) {
+                await handleMovieSearchCommand(wasi_sock, wasi_msg, rawFrom, msgText);
+                return;
+            }
+
             if (msgText.toLowerCase().startsWith('!tagall')) {
                 await handleTagAllCommand(wasi_sock, wasi_msg, rawFrom, isGroup, msgText);
                 return;
@@ -472,70 +525,6 @@ async function startSession(sessionId) {
                 return;
             }
 
-            // Individual On/Off Commands
-            if (msgText.toLowerCase() === '!textforward on') {
-                config.textForwardEnabled = true; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Text Forwarding Enabled!' }, { quoted: wasi_msg }); return;
-            }
-            if (msgText.toLowerCase() === '!textforward off') {
-                config.textForwardEnabled = false; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Text Forwarding Disabled!' }, { quoted: wasi_msg }); return;
-            }
-
-            if (msgText.toLowerCase() === '!imageforward on') {
-                config.imageForwardEnabled = true; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Image Forwarding Enabled!' }, { quoted: wasi_msg }); return;
-            }
-            if (msgText.toLowerCase() === '!imageforward off') {
-                config.imageForwardEnabled = false; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Image Forwarding Disabled!' }, { quoted: wasi_msg }); return;
-            }
-
-            if (msgText.toLowerCase() === '!videoforward on') {
-                config.videoForwardEnabled = true; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Video Forwarding Enabled!' }, { quoted: wasi_msg }); return;
-            }
-            if (msgText.toLowerCase() === '!videoforward off') {
-                config.videoForwardEnabled = false; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Video Forwarding Disabled!' }, { quoted: wasi_msg }); return;
-            }
-
-            if (msgText.toLowerCase() === '!documentforward on') {
-                config.documentForwardEnabled = true; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Document Forwarding Enabled!' }, { quoted: wasi_msg }); return;
-            }
-            if (msgText.toLowerCase() === '!documentforward off') {
-                config.documentForwardEnabled = false; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Document Forwarding Disabled!' }, { quoted: wasi_msg }); return;
-            }
-
-            if (msgText.toLowerCase() === '!stickerforward on') {
-                config.stickerForwardEnabled = true; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Sticker Forwarding Enabled!' }, { quoted: wasi_msg }); return;
-            }
-            if (msgText.toLowerCase() === '!stickerforward off') {
-                config.stickerForwardEnabled = false; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Sticker Forwarding Disabled!' }, { quoted: wasi_msg }); return;
-            }
-
-            if (msgText.toLowerCase() === '!voiceforward on') {
-                config.voiceForwardEnabled = true; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Voice Forwarding Enabled!' }, { quoted: wasi_msg }); return;
-            }
-            if (msgText.toLowerCase() === '!voiceforward off') {
-                config.voiceForwardEnabled = false; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Voice Forwarding Disabled!' }, { quoted: wasi_msg }); return;
-            }
-
-            if (msgText.toLowerCase() === '!albumforward on') {
-                config.albumForwardEnabled = true; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🟢 Album/Multi-video Forwarding Enabled!' }, { quoted: wasi_msg }); return;
-            }
-            if (msgText.toLowerCase() === '!albumforward off') {
-                config.albumForwardEnabled = false; saveBotConfig();
-                await wasi_sock.sendMessage(rawFrom, { text: '🔴 Album/Multi-video Forwarding Disabled!' }, { quoted: wasi_msg }); return;
-            }
-
             if (msgText.toLowerCase() === '!antilink on') {
                 config.antiLinkEnabled = true;
                 saveBotConfig();
@@ -578,12 +567,18 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEAVY FILE RELAY LOGIC (WORLDWIDE 99+ VIDEOS)
+            // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEROKU CONFIG FORWARD_TYPES LOGIC
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
 
             // Sirf groups ke messages ko auto forward karne ke liye
             if (!isGroup) return;
+
+            // Heroku Env se allowed forward types read karna (e.g. video, image, document, text, sticker, voice)
+            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document,album,text')
+                .toLowerCase()
+                .split(',')
+                .map(t => t.trim());
 
             // Media Type Checks
             const isText = !!(msgContent.conversation || msgContent.extendedTextMessage);
@@ -601,13 +596,17 @@ async function startSession(sessionId) {
                 msgContent.viewOnceMessageV2?.message?.albumMessage
             );
 
-            if (isText && !config.textForwardEnabled) return;
-            if (isImage && !config.imageForwardEnabled) return;
-            if (isVideo && !config.videoForwardEnabled) return;
-            if (isDocument && !config.documentForwardEnabled) return;
-            if (isSticker && !config.stickerForwardEnabled) return;
-            if (isVoice && !config.voiceForwardEnabled) return;
-            if (isAlbum && !config.albumForwardEnabled) return;
+            // Filtering based on Heroku Config Vars (FORWARD_TYPES)
+            let shouldForwardType = false;
+            if (isText && allowedTypes.includes('text')) shouldForwardType = true;
+            if (isImage && allowedTypes.includes('image')) shouldForwardType = true;
+            if (isVideo && allowedTypes.includes('video')) shouldForwardType = true;
+            if (isDocument && allowedTypes.includes('document')) shouldForwardType = true;
+            if (isSticker && allowedTypes.includes('sticker')) shouldForwardType = true;
+            if (isVoice && allowedTypes.includes('voice')) shouldForwardType = true;
+            if (isAlbum && (allowedTypes.includes('album') || allowedTypes.includes('video'))) shouldForwardType = true;
+
+            if (!shouldForwardType) return;
 
             let targetJid = null;
             
@@ -768,7 +767,7 @@ wasi_app.get('/api/health', async (req, res) => {
 function wasi_startServer() {
     wasi_app.listen(wasi_port, () => {
         console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Worldwide Auto-Forwarding, Multi-Video Relay & !forward Command Configured!`);
+        console.log(`🛡️ Worldwide Auto-Forwarding, Heroku FORWARD_TYPES Configured!`);
     });
 }
 
