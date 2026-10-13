@@ -68,7 +68,7 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 // -----------------------------------------------------------------------------
-// AUTO FORWARD & SIMPLE MAPPING CONFIGURATION
+// AUTO FORWARD & ADVANCED MULTI-GROUP MAPPING CONFIGURATION
 // -----------------------------------------------------------------------------
 const OLD_TEXT_REGEX = process.env.OLD_TEXT_REGEX
     ? process.env.OLD_TEXT_REGEX.split(',').map(pattern => {
@@ -85,18 +85,23 @@ const NEW_TEXT = process.env.NEW_TEXT
     ? process.env.NEW_TEXT
     : '';
 
-let FORWARD_MAP = {};
-try {
-    if (process.env.FORWARD_MAP) {
-        process.env.FORWARD_MAP.split(',').forEach(pair => {
-            const [src, target] = pair.split(':');
-            if (src && target) {
-                FORWARD_MAP[src.trim()] = target.trim();
-            }
-        });
-    }
-} catch (e) {
-    console.error('Failed to parse FORWARD_MAP:', e);
+// Helper to parse ADVANCED_MAPPING from Heroku Env
+// Format: sourceJid:targetJid:types(document,image,video,etc)
+function getAdvancedMappings() {
+    const rawMapping = process.env.ADVANCED_MAPPING || '';
+    if (!rawMapping) return [];
+    
+    return rawMapping.split(';').map(rule => {
+        const parts = rule.trim().split(':');
+        if (parts.length >= 2) {
+            return {
+                source: parts[0].trim(),
+                target: parts[1].trim(),
+                types: parts[2] ? parts[2].toLowerCase().split(',').map(t => t.trim()) : ['document', 'image', 'video', 'album', 'text']
+            };
+        }
+        return null;
+    }).filter(Boolean);
 }
 
 // Helper to get target JIDs for manual forwarding
@@ -567,18 +572,10 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ ULTRA-FAST ZERO-MEMORY ALBUM & HEROKU CONFIG FORWARD_TYPES LOGIC (WITH VOICE)
+            // ⚡ ADVANCED MULTI-MAPPING ROUTING LOGIC
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
-
-            // Sirf groups ke messages ko auto forward karne ke liye
             if (!isGroup) return;
-
-            // Heroku Env se allowed forward types read karna (e.g. video, image, document, text, sticker, voice)
-            const allowedTypes = (process.env.FORWARD_TYPES || 'video,image,document,album,text,voice')
-                .toLowerCase()
-                .split(',')
-                .map(t => t.trim());
 
             // Media Type Checks
             const isText = !!(msgContent.conversation || msgContent.extendedTextMessage);
@@ -588,7 +585,6 @@ async function startSession(sessionId) {
             const isSticker = !!msgContent.stickerMessage;
             const isVoice = !!(msgContent.audioMessage && msgContent.audioMessage.ptt);
             
-            // Universal Album / Multi-media detection
             const isAlbum = !!(
                 msgContent.albumMessage || 
                 msgContent.messageContextInfo?.messageAssociation ||
@@ -596,34 +592,33 @@ async function startSession(sessionId) {
                 msgContent.viewOnceMessageV2?.message?.albumMessage
             );
 
-            // Filtering based on Heroku Config Vars (FORWARD_TYPES)
-            let shouldForwardType = false;
-            if (isText && allowedTypes.includes('text')) shouldForwardType = true;
-            if (isImage && allowedTypes.includes('image')) shouldForwardType = true;
-            if (isVideo && allowedTypes.includes('video')) shouldForwardType = true;
-            if (isDocument && allowedTypes.includes('document')) shouldForwardType = true;
-            if (isSticker && allowedTypes.includes('sticker')) shouldForwardType = true;
-            if (isVoice && allowedTypes.includes('voice')) shouldForwardType = true;
-            if (isAlbum && (allowedTypes.includes('album') || allowedTypes.includes('video'))) shouldForwardType = true;
+            // Check advanced mappings from Heroku Config Vars
+            const mappings = getAdvancedMappings();
+            const activeRule = mappings.find(rule => cleanFrom.includes(cleanJid(rule.source)));
 
-            if (!shouldForwardType) return;
-
-            let targetJid = null;
-            
-            const matchedSourceKey = Object.keys(FORWARD_MAP).find(src => cleanFrom.includes(cleanJid(src)));
-            if (matchedSourceKey) {
-                targetJid = FORWARD_MAP[matchedSourceKey];
-            } else {
+            if (!activeRule) {
+                // Agar advanced mapping match nahi hui, toh purana default system check karo
                 const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
                 const isUniversalAll = sourceList.length === 0 || sourceList[0] === '' || sourceList.includes('all') || sourceList.includes('*');
-                
-                if (!isUniversalAll && !sourceList.some(src => cleanFrom.includes(src))) {
-                    return; 
-                }
-
-                const targets = (process.env.TARGET_JIDS || '').split(',').map(id => id.trim()).filter(Boolean);
-                targetJid = targets[0]; 
+                if (!isUniversalAll && !sourceList.some(src => cleanFrom.includes(src))) return;
             }
+
+            let targetJid = activeRule ? activeRule.target : getTargetJids()[0];
+            let allowedTypes = activeRule ? activeRule.types : (process.env.FORWARD_TYPES || 'video,image,document,album,text,voice').toLowerCase().split(',').map(t => t.trim());
+
+            // Type Matching Check
+            let currentMsgType = '';
+            if (isDocument) currentMsgType = 'document';
+            else if (isVideo) currentMsgType = 'video';
+            else if (isImage) currentMsgType = 'image';
+            else if (isSticker) currentMsgType = 'sticker';
+            else if (isVoice) currentMsgType = 'voice';
+            else if (isText) currentMsgType = 'text';
+            else if (isAlbum) currentMsgType = 'album';
+
+            // Agar album hai aur rule mein video ya image allowed hai
+            const isAllowed = allowedTypes.includes(currentMsgType) || (isAlbum && (allowedTypes.includes('album') || allowedTypes.includes('video') || allowedTypes.includes('image')));
+            if (!isAllowed) return;
 
             if (!targetJid) return;
 
@@ -659,7 +654,7 @@ async function startSession(sessionId) {
 
                         await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
 
-                        console.log(`[+] Worldwide high-speed multi-video/album forwarded from group ${cleanFrom} to ${targetJid}`);
+                        console.log(`[+] Mapped forward from ${cleanFrom} to target ${targetJid} [Type: ${currentMsgType}]`);
                         break;
                     } catch (err) {
                         console.error(`[!] Attempt ${attempt} relay failed for ${targetJid}:`, err.message);
@@ -764,12 +759,10 @@ wasi_app.get('/api/health', async (req, res) => {
 // -------------------------------------------------------------
 // SERVER START
 // -----------------------------
-function wasi_startServer() {
-    wasi_app.listen(wasi_port, () => {
-        console.log(`🌐 Server running on port ${wasi_port}`);
-        console.log(`🛡️ Worldwide Auto-Forwarding, Heroku FORWARD_TYPES Configured!`);
-    });
-}
+wasi_app.listen(wasi_port, () => {
+    console.log(`🌐 Server running on port ${wasi_port}`);
+    console.log(`🛡️ Advanced Multi-Group ADVANCED_MAPPING Configured!`);
+});
 
 // -------------------------------------------------------------
 // MAIN STARTUP
@@ -781,8 +774,6 @@ async function main() {
 
     const sessionId = config.sessionId || 'wasi_session';
     await startSession(sessionId);
-
-    wasi_startServer();
 }
 
 main().catch(err => console.error('Main startup error:', err));
