@@ -97,7 +97,7 @@ function getAdvancedMappings() {
             return {
                 source: parts[0].trim(),
                 target: parts[1].trim(),
-                types: parts[2] ? parts[2].toLowerCase().split(',').map(t => t.trim()) : ['document', 'image', 'video', 'album', 'text']
+                types: parts[2] ? parts[2].toLowerCase().split(',').map(t => t.trim()) : ['document', 'image', 'video', 'album', 'text', 'voice', 'sticker']
             };
         }
         return null;
@@ -572,7 +572,7 @@ async function startSession(sessionId) {
             }
                  
             // =========================================================================
-            // ⚡ ADVANCED MULTI-MAPPING ROUTING LOGIC
+            // ⚡ ADVANCED MULTI-MAPPING ROUTING LOGIC (ONLY ADVANCED_MAPPING)
             // =========================================================================
             if (config.autoForwardEnabled === false) return;
             if (!isGroup) return;
@@ -594,17 +594,9 @@ async function startSession(sessionId) {
 
             // Check advanced mappings from Heroku Config Vars
             const mappings = getAdvancedMappings();
-            const activeRule = mappings.find(rule => cleanFrom.includes(cleanJid(rule.source)));
+            const matchingRules = mappings.filter(rule => cleanFrom.includes(cleanJid(rule.source)));
 
-            if (!activeRule) {
-                // Agar advanced mapping match nahi hui, toh purana default system check karo
-                const sourceList = (process.env.SOURCE_JIDS || '').split(',').map(id => cleanJid(id));
-                const isUniversalAll = sourceList.length === 0 || sourceList[0] === '' || sourceList.includes('all') || sourceList.includes('*');
-                if (!isUniversalAll && !sourceList.some(src => cleanFrom.includes(src))) return;
-            }
-
-            let targetJid = activeRule ? activeRule.target : getTargetJids()[0];
-            let allowedTypes = activeRule ? activeRule.types : (process.env.FORWARD_TYPES || 'video,image,document,album,text,voice').toLowerCase().split(',').map(t => t.trim());
+            if (matchingRules.length === 0) return; // Agar is source group ka koi rule set nahi hai toh ignore karo
 
             // Type Matching Check
             let currentMsgType = '';
@@ -616,49 +608,53 @@ async function startSession(sessionId) {
             else if (isText) currentMsgType = 'text';
             else if (isAlbum) currentMsgType = 'album';
 
-            // Agar album hai aur rule mein video ya image allowed hai
-            const isAllowed = allowedTypes.includes(currentMsgType) || (isAlbum && (allowedTypes.includes('album') || allowedTypes.includes('video') || allowedTypes.includes('image')));
-            if (!isAllowed) return;
+            let targetsToSend = [];
 
-            if (!targetJid) return;
+            for (const rule of matchingRules) {
+                const isAllowed = rule.types.includes(currentMsgType) || 
+                                  (isAlbum && (rule.types.includes('album') || rule.types.includes('video') || rule.types.includes('image')));
+                if (isAllowed) {
+                    targetsToSend.push(rule.target);
+                }
+            }
 
-            if (wasi_msg.message) {
-                for (let attempt = 1; attempt <= 3; attempt++) {
-                    try {
-                        let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
+            if (targetsToSend.length === 0) return;
 
-                        const cleanContext = (obj) => {
-                            if (!obj || typeof obj !== 'object') return;
-                            if (obj.contextInfo) {
-                                delete obj.contextInfo.forwardingScore;
-                                delete obj.contextInfo.isForwarded;
-                                obj.contextInfo.participant = "Raju Boss +923071782626";
-                            }
-                            for (let key of Object.keys(obj)) {
-                                if (typeof obj[key] === 'object') {
-                                    cleanContext(obj[key]);
+            // Forward to all matched target groups for this rule
+            for (const targetJid of targetsToSend) {
+                if (wasi_msg.message) {
+                    for (let attempt = 1; attempt <= 3; attempt++) {
+                        try {
+                            let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
+
+                            const cleanContext = (obj) => {
+                                if (!obj || typeof obj !== 'object') return;
+                                if (obj.contextInfo) {
+                                    delete obj.contextInfo.forwardingScore;
+                                    delete obj.contextInfo.isForwarded;
+                                    obj.contextInfo.participant = "Raju Boss +923071782626";
                                 }
+                                for (let key of Object.keys(obj)) {
+                                    if (typeof obj[key] === 'object') cleanContext(obj[key]);
+                                }
+                            };
+                            cleanContext(cleanMessage);
+
+                            if (cleanMessage.imageMessage?.caption) {
+                                cleanMessage.imageMessage.caption = replaceCaption(cleanMessage.imageMessage.caption);
                             }
-                        };
-                        cleanContext(cleanMessage);
+                            if (cleanMessage.videoMessage?.caption) {
+                                cleanMessage.videoMessage.caption = replaceCaption(cleanMessage.videoMessage.caption);
+                            }
+                            if (cleanMessage.documentMessage?.caption) {
+                                cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
+                            }
 
-                        if (cleanMessage.imageMessage?.caption) {
-                            cleanMessage.imageMessage.caption = replaceCaption(cleanMessage.imageMessage.caption);
+                            await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
+                            break;
+                        } catch (err) {
+                            if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
                         }
-                        if (cleanMessage.videoMessage?.caption) {
-                            cleanMessage.videoMessage.caption = replaceCaption(cleanMessage.videoMessage.caption);
-                        }
-                        if (cleanMessage.documentMessage?.caption) {
-                            cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
-                        }
-
-                        await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
-
-                        console.log(`[+] Mapped forward from ${cleanFrom} to target ${targetJid} [Type: ${currentMsgType}]`);
-                        break;
-                    } catch (err) {
-                        console.error(`[!] Attempt ${attempt} relay failed for ${targetJid}:`, err.message);
-                        if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
                     }
                 }
             }
@@ -761,7 +757,7 @@ wasi_app.get('/api/health', async (req, res) => {
 // -----------------------------
 wasi_app.listen(wasi_port, () => {
     console.log(`🌐 Server running on port ${wasi_port}`);
-    console.log(`🛡️ Advanced Multi-Group ADVANCED_MAPPING Configured!`);
+    console.log(`🛡️ ADVANCED_MAPPING Routing Fully Configured!`);
 });
 
 // -------------------------------------------------------------
