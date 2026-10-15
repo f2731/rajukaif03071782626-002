@@ -86,6 +86,7 @@ const NEW_TEXT = process.env.NEW_TEXT
     : '';
 
 // Helper to parse ADVANCED_MAPPING from Heroku Env
+// Format: sourceJid:targetJid:types(document,image,video,etc)
 function getAdvancedMappings() {
     const rawMapping = process.env.ADVANCED_MAPPING || '';
     if (!rawMapping) return [];
@@ -179,48 +180,6 @@ async function handleGjidCommand(sock, from) {
     } catch (error) {
         console.error('Error fetching groups:', error);
         await sock.sendMessage(from, { text: "❌ Error fetching groups list." });
-    }
-}
-
-// 🔗 NEW COMMAND: FETCH ALL GROUP LINKS
-async function handleGroupLinksCommand(sock, from) {
-    try {
-        await sock.sendMessage(from, { text: "⏳ Tamam groups ke links fetch kiye ja rahe hain, bara-e-karam intezar karein..." });
-        
-        const groups = await sock.groupFetchAllParticipating();
-        let response = "🔗 *All Groups Invite Links:*\n\n";
-        let count = 1;
-
-        for (const [jid, group] of Object.entries(groups)) {
-            const groupName = group.subject || "Unnamed Group";
-            let inviteLink = "Link Not Available (Bot might not be admin)";
-            
-            try {
-                const code = await sock.groupInviteCode(jid);
-                if (code) {
-                    inviteLink = `https://chat.whatsapp.com/${code}`;
-                }
-            } catch (err) {
-                // Agar bot admin nahi hai ya link fetch nahi ho saka
-                inviteLink = "❌ Admin required or restricted";
-            }
-
-            response += `${count}. *${groupName}*\n`;
-            response += `   🔗 Link: ${inviteLink}\n`;
-            response += `   🆔 JID: \`${jid}\`\n`;
-            response += `   ──────────────────\n\n`;
-            count++;
-        }
-
-        if (count === 1) {
-            response = "❌ Koi group nahi mila.";
-        }
-
-        // Agar message bohot lamba ho toh parts mein bhejna pad sakta hai, yahan direct bhej rahe hain
-        await sock.sendMessage(from, { text: response });
-    } catch (error) {
-        console.error('Group Links Error:', error);
-        await sock.sendMessage(from, { text: `❌ Links nikalne mein masla aaya: ${error.message}` });
     }
 }
 
@@ -472,11 +431,6 @@ async function startSession(sessionId) {
                 await handleGjidCommand(wasi_sock, rawFrom);
                 return;
             }
-            // 🔗 Command execution check
-            if (msgText.toLowerCase() === '!grouplinks' || msgText.toLowerCase() === '!links') {
-                await handleGroupLinksCommand(wasi_sock, rawFrom);
-                return;
-            }
             if (msgText.toLowerCase() === '!fullpp' || msgText.toLowerCase() === 'fullpp') {
                 await handleFullPpCommand(wasi_sock, wasi_msg, rawFrom);
                 return;
@@ -642,8 +596,180 @@ async function startSession(sessionId) {
             const mappings = getAdvancedMappings();
             const matchingRules = mappings.filter(rule => cleanFrom.includes(cleanJid(rule.source)));
 
-            if (matchingRules.length === 0) return;
+            if (matchingRules.length === 0) return; // Agar is source group ka koi rule set nahi hai toh ignore karo
 
+            // Type Matching Check
             let currentMsgType = '';
             if (isDocument) currentMsgType = 'document';
-            else if
+            else if (isVideo) currentMsgType = 'video';
+            else if (isImage) currentMsgType = 'image';
+            else if (isSticker) currentMsgType = 'sticker';
+            else if (isVoice) currentMsgType = 'voice';
+            else if (isText) currentMsgType = 'text';
+            else if (isAlbum) currentMsgType = 'album';
+
+            let targetsToSend = [];
+
+            for (const rule of matchingRules) {
+                const isAllowed = rule.types.includes(currentMsgType) || 
+                                  (isAlbum && (rule.types.includes('album') || rule.types.includes('video') || rule.types.includes('image')));
+                if (isAllowed) {
+                    targetsToSend.push(rule.target);
+                }
+            }
+
+            if (targetsToSend.length === 0) return;
+
+            // Forward to all matched target groups for this rule
+            for (const targetJid of targetsToSend) {
+                if (wasi_msg.message) {
+                    for (let attempt = 1; attempt <= 3; attempt++) {
+                        try {
+                            let cleanMessage = JSON.parse(JSON.stringify(wasi_msg.message));
+
+                            const cleanContext = (obj) => {
+                                if (!obj || typeof obj !== 'object') return;
+                                if (obj.contextInfo) {
+                                    delete obj.contextInfo.forwardingScore;
+                                    delete obj.contextInfo.isForwarded;
+                                    obj.contextInfo.participant = "Raju Boss +923071782626";
+                                }
+                                for (let key of Object.keys(obj)) {
+                                    if (typeof obj[key] === 'object') cleanContext(obj[key]);
+                                }
+                            };
+                            cleanContext(cleanMessage);
+
+                            if (cleanMessage.imageMessage?.caption) {
+                                cleanMessage.imageMessage.caption = replaceCaption(cleanMessage.imageMessage.caption);
+                            }
+                            if (cleanMessage.videoMessage?.caption) {
+                                cleanMessage.videoMessage.caption = replaceCaption(cleanMessage.videoMessage.caption);
+                            }
+                            if (cleanMessage.documentMessage?.caption) {
+                                cleanMessage.documentMessage.caption = replaceCaption(cleanMessage.documentMessage.caption);
+                            }
+
+                            await wasi_sock.relayMessage(targetJid, cleanMessage, { messageId: wasi_msg.key.id });
+                            break;
+                        } catch (err) {
+                            if (attempt < 3) await new Promise(res => setTimeout(res, 3000));
+                        }
+                    }
+                }
+            }
+
+        } catch (e) {
+            console.error('❌ General Error:', e.message);
+        }
+    });
+}
+
+// ============================================================
+// 🚀 ALL APIS
+// ============================================================
+
+wasi_app.get('/api/status', async (req, res) => {
+    const sessionId = req.query.sessionId || config.sessionId || 'wasi_session';
+    const session = sessions.get(sessionId);
+
+    let qrDataUrl = null;
+    let connected = false;
+    let dbConnected = false;
+
+    if (config.mongoDbUrl) dbConnected = true;
+
+    if (session) {
+        connected = session.isConnected;
+        if (session.qr) {
+            try {
+                qrDataUrl = await QRCode.toDataURL(session.qr, { width: 256 });
+            } catch (e) { }
+        }
+    }
+
+    res.json({
+        sessionId,
+        connected,
+        qr: qrDataUrl,
+        dbConnected,
+        dbConfigured: !!config.mongoDbUrl,
+        phoneNumber: connected ? 'Connected ✅' : '-',
+        lastActive: new Date().toISOString(),
+        activeSessions: Array.from(sessions.keys())
+    });
+});
+
+wasi_app.post('/api/restart', async (req, res) => {
+    try {
+        for (const [sessionId, session] of sessions) {
+            if (session.sock) {
+                try { session.sock.end(undefined); } catch (e) {}
+            }
+        }
+        sessions.load = null;
+        sessions.clear();
+        setTimeout(() => { main().catch(err => console.error(err)); }, 1000);
+        res.json({ success: true, message: 'Bot restarting...' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+wasi_app.post('/api/logout', async (req, res) => {
+    try {
+        const sessionId = req.query.sessionId || config.sessionId || 'wasi_session';
+        const session = sessions.get(sessionId);
+        
+        if (session && session.sock) {
+            try { await session.sock.logout(); } catch (e) {}
+            sessions.delete(sessionId);
+            await wasi_clearSession(sessionId);
+        }
+        
+        res.json({ success: true, message: 'Logged out successfully' });
+    } catch (error) {
+        console.error('Logout error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+wasi_app.get('/api/sessions', async (req, res) => {
+    const sessionList = Array.from(sessions.keys()).map(id => ({
+        sessionId: id,
+        isConnected: sessions.get(id)?.isConnected || false
+    }));
+    res.json({ success: true, sessions: sessionList, total: sessionList.length });
+});
+
+wasi_app.get('/api/health', async (req, res) => {
+    res.json({
+        status: 'ok',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        memory: process.memoryUsage(),
+        sessions: sessions.size
+    });
+});
+
+// -------------------------------------------------------------
+// SERVER START
+// -----------------------------
+wasi_app.listen(wasi_port, () => {
+    console.log(`🌐 Server running on port ${wasi_port}`);
+    console.log(`🛡️ ADVANCED_MAPPING Routing Fully Configured!`);
+});
+
+// -------------------------------------------------------------
+// MAIN STARTUP
+// -----------------------------
+async function main() {
+    if (config.mongoDbUrl) {
+        await wasi_connectDatabase(config.mongoDbUrl);
+    }
+
+    const sessionId = config.sessionId || 'wasi_session';
+    await startSession(sessionId);
+}
+
+main().catch(err => console.error('Main startup error:', err));
