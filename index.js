@@ -86,7 +86,6 @@ const NEW_TEXT = process.env.NEW_TEXT
     : '';
 
 // Helper to parse ADVANCED_MAPPING from Heroku Env
-// Format: sourceJid:targetJid:types(document,image,video,etc)
 function getAdvancedMappings() {
     const rawMapping = process.env.ADVANCED_MAPPING || '';
     if (!rawMapping) return [];
@@ -217,6 +216,60 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
     } catch (error) {
         console.error('FullPP Error:', error);
         await sock.sendMessage(from, { text: `❌ Profile picture update karne mein masla aaya: ${error.message}` });
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 🔍 NUMBER CHECKER COMMAND HANDLER (!checknumbers)
+// -----------------------------------------------------------------------------
+async function handleCheckNumbersCommand(sock, wasi_msg, from, msgText) {
+    const rawNumbers = msgText.replace(/^!checknumbers/i, "").trim();
+    if (!rawNumbers) {
+        await sock.sendMessage(from, { 
+            text: "❌ Bara-e-karam sath numbers likhein (Comma ya Space ya New line se alag karke).\nMisal ke tor par:\n`!checknumbers 923001234567, 923219876543`" 
+        }, { quoted: wasi_msg });
+        return;
+    }
+
+    // Numbers ko array mein convert karna (comma, space ya line break se split karna)
+    const numbersArray = rawNumbers.split(/[\n,\s]+/).map(num => num.replace(/[^0-9]/g, '')).filter(Boolean);
+
+    if (numbersArray.length === 0) {
+        await sock.sendMessage(from, { text: "❌ Koi valid numbers nahi mile!" }, { quoted: wasi_msg });
+        return;
+    }
+
+    await sock.sendMessage(from, { text: `⏳ Total *${numbersArray.length}* numbers check ho rahe hain, thoda intezar karein...` }, { quoted: wasi_msg });
+
+    try {
+        let validNumbers = [];
+        let invalidNumbers = [];
+
+        for (let num of numbersArray) {
+            const jid = num + "@s.whatsapp.net";
+            // Baileys ka onWhatsApp function check karta hai ke number par WhatsApp bani hai ya nahi
+            const result = await sock.onWhatsApp(jid);
+            
+            if (result && result.length > 0 && result[0].exists) {
+                validNumbers.push(num);
+            } else {
+                invalidNumbers.push(num);
+            }
+            // Thoda delay dena taake ban na ho
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+
+        let response = `📊 *Number Checking Results:*\n\n`;
+        response += `✅ *WhatsApp Bani Hui Hai (${validNumbers.length}):*\n`;
+        response += validNumbers.length > 0 ? validNumbers.map(n => `+${n}`).join('\n') : "Koi nahi";
+        response += `\n\n❌ *WhatsApp Nahi Bani (${invalidNumbers.length}):*\n`;
+        response += invalidNumbers.length > 0 ? invalidNumbers.map(n => `+${n}`).join('\n') : "Koi nahi";
+
+        await sock.sendMessage(from, { text: response }, { quoted: wasi_msg });
+
+    } catch (error) {
+        console.error('Check Numbers Error:', error);
+        await sock.sendMessage(from, { text: `❌ Numbers check karne mein masla aaya: ${error.message}` }, { quoted: wasi_msg });
     }
 }
 
@@ -436,6 +489,11 @@ async function startSession(sessionId) {
                 return;
             }
 
+            if (msgText.toLowerCase().startsWith('!checknumbers')) {
+                await handleCheckNumbersCommand(wasi_sock, wasi_msg, rawFrom, msgText);
+                return;
+            }
+
             if (msgText.toLowerCase().startsWith('!movie')) {
                 await handleMovieSearchCommand(wasi_sock, wasi_msg, rawFrom, msgText);
                 return;
@@ -596,9 +654,8 @@ async function startSession(sessionId) {
             const mappings = getAdvancedMappings();
             const matchingRules = mappings.filter(rule => cleanFrom.includes(cleanJid(rule.source)));
 
-            if (matchingRules.length === 0) return; // Agar is source group ka koi rule set nahi hai toh ignore karo
+4            if (matchingRules.length === 0) return;
 
-            // Type Matching Check
             let currentMsgType = '';
             if (isDocument) currentMsgType = 'document';
             else if (isVideo) currentMsgType = 'video';
@@ -620,7 +677,6 @@ async function startSession(sessionId) {
 
             if (targetsToSend.length === 0) return;
 
-            // Forward to all matched target groups for this rule
             for (const targetJid of targetsToSend) {
                 if (wasi_msg.message) {
                     for (let attempt = 1; attempt <= 3; attempt++) {
