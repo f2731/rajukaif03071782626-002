@@ -220,7 +220,7 @@ async function handleFullPpCommand(sock, wasi_msg, from) {
 }
 
 // -----------------------------------------------------------------------------
-// 🔍 NUMBER CHECKER COMMAND HANDLER (!checknumbers)
+// 🔍 SAFE NUMBER CHECKER COMMAND HANDLER (!checknumbers)
 // -----------------------------------------------------------------------------
 async function handleCheckNumbersCommand(sock, wasi_msg, from, msgText) {
     const rawNumbers = msgText.replace(/^!checknumbers/i, "").trim();
@@ -245,15 +245,27 @@ async function handleCheckNumbersCommand(sock, wasi_msg, from, msgText) {
         let invalidNumbers = [];
 
         for (let num of numbersArray) {
-            const jid = num + "@s.whatsapp.net";
-            const result = await sock.onWhatsApp(jid);
-            
-            if (result && result.length > 0 && result[0].exists) {
-                validNumbers.push(num);
-            } else {
+            try {
+                const jid = num + "@s.whatsapp.net";
+                let exists = false;
+                if (typeof sock.onWhatsApp === 'function') {
+                    const result = await sock.onWhatsApp(jid);
+                    if (Array.isArray(result) && result.length > 0) {
+                        exists = !!(result[0].exists || result[0].jid);
+                    } else if (result && result.exists) {
+                        exists = true;
+                    }
+                }
+                
+                if (exists) {
+                    validNumbers.push(num);
+                } else {
+                    invalidNumbers.push(num);
+                }
+            } catch (err) {
                 invalidNumbers.push(num);
             }
-            await new Promise(resolve => setTimeout(resolve, 300));
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
 
         let response = `📊 *Number Checking Results:*\n\n`;
@@ -792,4 +804,37 @@ wasi_app.get('/api/sessions', async (req, res) => {
         sessionId: id,
         isConnected: sessions.get(id)?.isConnected || false
     }));
-    res.json({ success: true, sessions: sessionList,
+    res.json({ success: true, sessions: sessionList, total: sessionList.length });
+});
+
+wasi_app.get('/api/health', async (req, res) => {
+    res.json({
+        status: 'ok',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        memory: process.memoryUsage(),
+        sessions: sessions.size
+    });
+});
+
+// -------------------------------------------------------------
+// SERVER START
+// -----------------------------
+wasi_app.listen(wasi_port, () => {
+    console.log(`🌐 Server running on port ${wasi_port}`);
+    console.log(`🛡️ ADVANCED_MAPPING Routing Fully Configured!`);
+});
+
+// -------------------------------------------------------------
+// MAIN STARTUP
+// -----------------------------
+async function main() {
+    if (config.mongoDbUrl) {
+        await wasi_connectDatabase(config.mongoDbUrl);
+    }
+
+    const sessionId = config.sessionId || 'wasi_session';
+    await startSession(sessionId);
+}
+
+main().catch(err => console.error('Main startup error:', err));
