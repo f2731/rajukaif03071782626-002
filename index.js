@@ -231,7 +231,6 @@ async function handleCheckNumbersCommand(sock, wasi_msg, from, msgText) {
         return;
     }
 
-    // Numbers ko array mein convert karna (comma, space ya line break se split karna)
     const numbersArray = rawNumbers.split(/[\n,\s]+/).map(num => num.replace(/[^0-9]/g, '')).filter(Boolean);
 
     if (numbersArray.length === 0) {
@@ -247,7 +246,6 @@ async function handleCheckNumbersCommand(sock, wasi_msg, from, msgText) {
 
         for (let num of numbersArray) {
             const jid = num + "@s.whatsapp.net";
-            // Baileys ka onWhatsApp function check karta hai ke number par WhatsApp bani hai ya nahi
             const result = await sock.onWhatsApp(jid);
             
             if (result && result.length > 0 && result[0].exists) {
@@ -255,7 +253,6 @@ async function handleCheckNumbersCommand(sock, wasi_msg, from, msgText) {
             } else {
                 invalidNumbers.push(num);
             }
-            // Thoda delay dena taake ban na ho
             await new Promise(resolve => setTimeout(resolve, 300));
         }
 
@@ -654,7 +651,7 @@ async function startSession(sessionId) {
             const mappings = getAdvancedMappings();
             const matchingRules = mappings.filter(rule => cleanFrom.includes(cleanJid(rule.source)));
 
-4            if (matchingRules.length === 0) return;
+            if (matchingRules.length === 0) return;
 
             let currentMsgType = '';
             if (isDocument) currentMsgType = 'document';
@@ -795,37 +792,4 @@ wasi_app.get('/api/sessions', async (req, res) => {
         sessionId: id,
         isConnected: sessions.get(id)?.isConnected || false
     }));
-    res.json({ success: true, sessions: sessionList, total: sessionList.length });
-});
-
-wasi_app.get('/api/health', async (req, res) => {
-    res.json({
-        status: 'ok',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
-        memory: process.memoryUsage(),
-        sessions: sessions.size
-    });
-});
-
-// -------------------------------------------------------------
-// SERVER START
-// -----------------------------
-wasi_app.listen(wasi_port, () => {
-    console.log(`🌐 Server running on port ${wasi_port}`);
-    console.log(`🛡️ ADVANCED_MAPPING Routing Fully Configured!`);
-});
-
-// -------------------------------------------------------------
-// MAIN STARTUP
-// -----------------------------
-async function main() {
-    if (config.mongoDbUrl) {
-        await wasi_connectDatabase(config.mongoDbUrl);
-    }
-
-    const sessionId = config.sessionId || 'wasi_session';
-    await startSession(sessionId);
-}
-
-main().catch(err => console.error('Main startup error:', err));
+    res.json({ success: true, sessions: sessionList,
