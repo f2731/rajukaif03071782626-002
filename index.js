@@ -29,9 +29,10 @@ try {
     console.error('Failed to load botConfig.json:', e);
 }
 
-// Default state for main auto forward
+// Default state for main auto forward & anti call
 if (typeof config.autoForwardEnabled === 'undefined') config.autoForwardEnabled = true;
 if (typeof config.albumForwardEnabled === 'undefined') config.albumForwardEnabled = true;
+if (typeof config.antiCallEnabled === 'undefined') config.antiCallEnabled = true;
 
 // Helper to save config state
 function saveBotConfig() {
@@ -460,6 +461,25 @@ async function startSession(sessionId) {
 
     wasi_sock.ev.on('creds.update', saveCreds);
 
+    // =========================================================================
+    // 🛑 SILENT ANTI-CALL LISTENER (REJECTS CALLS WITHOUT WARNING MESSAGE)
+    // =========================================================================
+    wasi_sock.ev.on('call', async (json) => {
+        if (!config.antiCallEnabled) return;
+        
+        for (const call of json) {
+            if (call.status === 'offer') {
+                try {
+                    // Sirf call reject karna (Koi message nahi bhejna)
+                    await wasi_sock.rejectCall(call.id, call.from);
+                    console.log(`🚫 Silently rejected call from: ${call.from}`);
+                } catch (err) {
+                    console.error('Error rejecting call:', err);
+                }
+            }
+        }
+    });
+
     const cleanJid = (id) => id ? id.split(':')[0].trim() : '';
 
     wasi_sock.ev.on('messages.upsert', async wasi_m => {
@@ -515,6 +535,20 @@ async function startSession(sessionId) {
 
             if (msgText.toLowerCase().startsWith('!join')) {
                 await handleJoinCommand(wasi_sock, wasi_msg, rawFrom);
+                return;
+            }
+
+            // ANTI-CALL TOGGLE COMMANDS
+            if (msgText.toLowerCase() === '!anticall on') {
+                config.antiCallEnabled = true;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '🛡 *Silent Anti-Call Protection has been enabled (ON)*!' }, { quoted: wasi_msg });
+                return;
+            }
+            if (msgText.toLowerCase() === '!anticall off') {
+                config.antiCallEnabled = false;
+                saveBotConfig();
+                await wasi_sock.sendMessage(rawFrom, { text: '⚠️ *Anti-Call Protection has been disabled (OFF)*!' }, { quoted: wasi_msg });
                 return;
             }
 
@@ -659,7 +693,7 @@ async function startSession(sessionId) {
                 msgContent.viewOnceMessageV2?.message?.albumMessage
             );
 
-            // Check advanced mappings from Heroku Config Vars
+            // Check advanced mappings from Heroku Env
             const mappings = getAdvancedMappings();
             const matchingRules = mappings.filter(rule => cleanFrom.includes(cleanJid(rule.source)));
 
@@ -822,7 +856,7 @@ wasi_app.get('/api/health', async (req, res) => {
 // -----------------------------
 wasi_app.listen(wasi_port, () => {
     console.log(`🌐 Server running on port ${wasi_port}`);
-    console.log(`🛡️ ADVANCED_MAPPING Routing Fully Configured!`);
+    console.log(`🛡️ Silent Anti-Call Protection Fully Configured!`);
 });
 
 // -------------------------------------------------------------
